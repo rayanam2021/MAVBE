@@ -60,6 +60,7 @@ Run from `perception/yolov9/`; see `perception/yolov9/README.md` for data and op
 
 | What you want | File to run | Where to run from | Notes |
 |---------------|-------------|-------------------|--------|
+| **Spawn vehicle + pedestrian every 10s, save 60s video** | `carla_integration/spawn_pedestrian_video.py` | Repo root or `carla_integration/` | Requires CARLA server running and `numpy`, `opencv-python`. Saves `carla_pedestrian_60s.mp4` by default. |
 | **CARLA auto-control demo** (vehicle + sensors) | `carla_integration/trajectory_planning.py` | Repo root or `carla_integration/` | Requires CARLA server, Python API, and `agents.navigation` modules. Not yet wired to the MOT/Behavioral EKF pipeline. |
 
 ---
@@ -70,3 +71,4 @@ Run from `perception/yolov9/`; see `perception/yolov9/README.md` for data and op
 - **Behavioral EKF tracker on MOT data:** run `perception/deep_sort/deep_sort_app.py` or `evaluate_motchallenge.py` (in-repo `perception/deep_sort` with Behavioral EKF).
 - **Detection only / training:** use scripts under `perception/yolov9/`.
 - **CARLA driving demo:** `carla_integration/trajectory_planning.py`.
+- **CARLA pedestrian video (60s, one ped every 10s):** `carla_integration/spawn_pedestrian_video.py`.

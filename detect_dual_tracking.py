@@ -1,3 +1,12 @@
+"""
+YOLO + Deep SORT detection and tracking (video/folder/webcam).
+
+NOTE: This script uses the external package "deep_sort_pytorch", which has its
+own Kalman filter. It does NOT use the in-repo Behavioral EKF from
+perception/deep_sort/deep_sort/behavioral_ekf.py. To use the Behavioral EKF
+(CT + social force), run the in-repo tracker via perception/deep_sort/deep_sort_app.py
+with precomputed detections.
+"""
 import argparse
 import os
 import platform
@@ -10,7 +19,7 @@ from deep_sort_pytorch.utils.parser import get_config
 from deep_sort_pytorch.deep_sort import DeepSort
 from collections import deque
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLO root directory
+ROOT = FILE.parents[0]  # Directory containing this script (MAVBE repo root)
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
@@ -23,11 +32,21 @@ from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
 
 def initialize_deepsort():
-    # Create the Deep SORT configuration object and load settings from the YAML file
+    # Config path: use repo's configs/ so it exists regardless of CWD or deep_sort_pytorch install
+    config_path = FILE.parent / "configs" / "deep_sort.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            "Deep SORT config not found at {} . Create it or run from MAVBE repo root.".format(config_path)
+        )
     cfg_deep = get_config()
-    cfg_deep.merge_from_file("deep_sort_pytorch/configs/deep_sort.yaml")
+    cfg_deep.merge_from_file(str(config_path))
+    # Resolve ReID checkpoint path relative to repo root so it works from any CWD
+    reid_ckpt = cfg_deep.DEEPSORT.REID_CKPT
+    if not os.path.isabs(reid_ckpt):
+        reid_ckpt = str(FILE.parent / reid_ckpt)
+    cfg_deep.DEEPSORT.REID_CKPT = reid_ckpt
 
-    # Initialize the DeepSort tracker
+    # Initialize the DeepSort tracker (uses deep_sort_pytorch's Kalman filter, not our Behavioral EKF)
     deepsort = DeepSort(cfg_deep.DEEPSORT.REID_CKPT,
                         max_dist=cfg_deep.DEEPSORT.MAX_DIST,
                         # min_confidence  parameter sets the minimum tracking confidence required for an object detection to be considered in the tracking process

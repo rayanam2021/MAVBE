@@ -26,17 +26,7 @@ except ImportError as e:
     print("Need numpy and opencv-python: pip install numpy opencv-python")
     sys.exit(1)
 
-# Add CARLA PythonAPI to path (same as trajectory_planning.py)
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_MAVBE_ROOT = os.path.dirname(_SCRIPT_DIR)
-try:
-    sys.path.append(glob.glob(os.path.join(_MAVBE_ROOT, 'carla', 'dist', 'carla-*%d.%d-%s.egg' % (
-        sys.version_info.major,
-        sys.version_info.minor,
-        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
-except IndexError:
-    pass
-sys.path.append(os.path.join(_MAVBE_ROOT, 'carla'))
+
 
 try:
     import carla
@@ -47,7 +37,7 @@ except ImportError:
 
 def get_latest_image(image_holder):
     """Return latest BGR array from camera callback storage."""
-    if not image_holder["data"]:
+    if image_holder["data"] is None:
         return None
     return image_holder["data"]
 
@@ -111,9 +101,9 @@ def run(args):
 
     walkers = []
     controllers = []
-    next_pedestrian_time = 10.0  # first pedestrian at t=10s
+    next_pedestrian_time = 1.0  # first pedestrian at t=10s
     last_redirect_time = 0.0     # for random walk redirect every 5s
-    duration = 60.0
+    duration = 30.0
     sim_time = 0.0
     dt = 1.0 / args.fps
 
@@ -124,13 +114,13 @@ def run(args):
 
             # Spawn a new pedestrian every 10 seconds
             if sim_time >= next_pedestrian_time:
-                next_pedestrian_time += 10.0
+                next_pedestrian_time += 1.0
                 try:
                     # Spawn near the vehicle (offset in vehicle frame)
                     v_t = vehicle.get_transform()
                     # Offset 5–12 m in front/side
                     dx = random.uniform(5, 12) * (1 if random.random() > 0.5 else -1)
-                    dy = random.uniform(5, 12) * (1 if random.random() > 0.5 else -1)
+                    dy = random.uniform(5, 6) * (1 if random.random() > 0.5 else -1)
                     loc = v_t.location
                     spawn_loc = carla.Location(
                         x=loc.x + dx,

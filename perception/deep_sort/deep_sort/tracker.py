@@ -2,6 +2,7 @@
 from __future__ import absolute_import
 import numpy as np
 from . import behavioral_ekf
+# from . import kalman_filter as behavioral_ekf
 from . import linear_assignment
 from . import iou_matching
 from .track import Track
@@ -44,6 +45,7 @@ class Tracker:
         self.n_init = n_init
 
         self.kf = behavioral_ekf.BehavioralEKFFilter()
+        # self.kf = behavioral_ekf.KalmanFilter()
         self.tracks = []
         self._next_id = 1
 

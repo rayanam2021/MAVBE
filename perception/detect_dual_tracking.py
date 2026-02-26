@@ -7,6 +7,7 @@ import math
 import torch
 import numpy as np
 from collections import deque
+import cv2
 
 # ---------- PATH SETUP ----------
 # Path to this script
@@ -17,7 +18,7 @@ SCRIPT_ROOT = FILE.parents[0]  # folder containing this script
 REPO_ROOT = SCRIPT_ROOT  # adjust if your repo root is elsewhere
 
 # YOLO repo path
-YOLO_ROOT = REPO_ROOT / "perception/yolov9"  # path to your YOLO repo
+YOLO_ROOT = REPO_ROOT / "yolov9"  # path to your YOLO repo
 
 # deep_sort repo path
 DEEP_SORT_ROOT = REPO_ROOT / "deep_sort"  # path to your deep_sort repo
@@ -33,11 +34,11 @@ from deep_sort import nn_matching
 from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 
-# FILE = Path(__file__).resolve()
-# ROOT = FILE.parents[0]  # Directory containing this script (repo root)
-# if str(ROOT) not in sys.path:
-#     sys.path.append(str(ROOT))
-# ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]  # Directory containing this script (repo root)
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 # YOLO utils
 from models.common import DetectMultiBackend
@@ -79,6 +80,24 @@ def colorLabels(classid):
     else:
         color = (200, 100,0)
     return tuple(color)
+
+import matplotlib.pyplot as plt
+
+def save_trajectories(data_deque, save_path='trajectories.png'):
+    plt.figure(figsize=(12,8))
+    for track_id, points in data_deque.items():
+        if len(points) == 0:
+            continue
+        points = np.array(points)
+        plt.plot(points[:,0], points[:,1], marker='o', label=f'ID {track_id}')
+    plt.gca().invert_yaxis()  # Origin (0,0) is top-left like in images
+    plt.xlabel('X pixels')
+    plt.ylabel('Y pixels')
+    plt.title('Object Trajectories')
+    plt.legend()
+    plt.savefig(save_path)
+    print(f"[INFO] Trajectory plot saved to {save_path}")
+    plt.close()
 
 def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, offset=(0,0)):
     height, width, _ = frame.shape
@@ -151,13 +170,19 @@ def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data
     vid_path, vid_writer = [None]*bs, [None]*bs
 
     # Initialize in-repo tracker (Behavioral EKF)
-    metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance=0.2, nn_budget=100)
+    # metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance=0.2, nn_budget=100)
+    metric = nn_matching.NearestNeighborDistanceMetric(
+        metric="cosine",
+        matching_threshold=0.2,  # this was max_cosine_distance
+        budget=100               # this was nn_budget
+    )
     tracker = Tracker(metric)
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
     for path, im, im0s, vid_cap, s in dataset:
+        print("here")
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.half() if model.fp16 else im.float()
@@ -201,9 +226,10 @@ def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data
                     x_tl = cx - w/2
                     y_tl = cy - h/2
                     tlwh = [x_tl, y_tl, w, h]
-                    feature = np.zeros(128)
+                    # feature = np.zeros(128)
+                    feature = np.ones(128) * 1e-6
                     detections.append(Detection(tlwh, conf, feature))
-
+                print(len(detections))
                 # Update tracker
                 tracker.predict()
                 tracker.update(detections)
@@ -225,7 +251,7 @@ def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data
                     draw_boxes(ims, bbox_xyxy, draw_trails, identities, object_id)
 
             # Show image
-            if view_img:
+            if view_img and False:
                 if platform.system() == 'Linux' and p not in windows:
                     windows.append(p)
                     cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
@@ -233,11 +259,13 @@ def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data
                 cv2.imshow(str(p), ims)
                 cv2.waitKey(1)
 
+    save_trajectories(data_deque, save_path=ROOT/'runs/detect/trajectories.png')
+
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolo.pt', help='model path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov9/weights/yolov9-c.pt', help='model path')
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/webcam')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
+    parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])
     parser.add_argument('--conf-thres', type=float, default=0.25)
     parser.add_argument('--iou-thres', type=float, default=0.45)

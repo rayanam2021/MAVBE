@@ -14,7 +14,7 @@ Multi-Agent Vehicle and Behavior Estimator (MAVBE)
 **Example (from repo root):**
 ```bash
 # From MAVBE/ (adjust path to yolo weights and source as needed)
-python detect_dual_tracking.py --source path/to/video.mp4 --weights perception/yolov9/yolov9.pt
+python detect_dual_tracking.py --source path/to/video.mp4 --weights perception/yolov9/yolov9-c.pt
 ```
 
 ---

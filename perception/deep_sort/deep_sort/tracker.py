@@ -41,7 +41,7 @@ class Tracker:
     def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=1):
         self.metric = metric
         self.max_iou_distance = max_iou_distance
-        self.max_age = max_age
+        self.max_age = 3000
         self.n_init = n_init
 
         self.kf = behavioral_ekf.BehavioralEKFFilter()
@@ -95,13 +95,44 @@ class Tracker:
 
     def _match(self, detections):
 
+        # def gated_metric(tracks, dets, track_indices, detection_indices):
+        #     features = np.array([dets[i].feature for i in detection_indices])
+        #     targets = np.array([tracks[i].track_id for i in track_indices])
+        #     cost_matrix = self.metric.distance(features, targets)
+        #     cost_matrix = linear_assignment.gate_cost_matrix(
+        #         self.kf, cost_matrix, tracks, dets, track_indices,
+        #         detection_indices)
+
+        #     return cost_matrix
+
         def gated_metric(tracks, dets, track_indices, detection_indices):
+
             features = np.array([dets[i].feature for i in detection_indices])
             targets = np.array([tracks[i].track_id for i in track_indices])
-            cost_matrix = self.metric.distance(features, targets)
-            cost_matrix = linear_assignment.gate_cost_matrix(
-                self.kf, cost_matrix, tracks, dets, track_indices,
-                detection_indices)
+
+            # Appearance cost
+            appearance_cost = self.metric.distance(features, targets)
+
+            # Motion (Mahalanobis) cost
+            measurements = np.asarray([dets[i].to_xyah() for i in detection_indices])
+
+            motion_cost = np.zeros_like(appearance_cost)
+
+            for row, track_idx in enumerate(track_indices):
+                track = tracks[track_idx]
+
+                # Mahalanobis distance for this track to all detections
+                gating_dist = self.kf.gating_distance(
+                    track.mean, track.covariance, measurements, only_position=False
+                )
+
+                motion_cost[row, :] = gating_dist
+
+            motion_cost = motion_cost / (motion_cost.max() + 1e-6)
+
+            # Weighted fusion
+            lambda_ = 0.7   # appearance weight
+            cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
 
             return cost_matrix
 

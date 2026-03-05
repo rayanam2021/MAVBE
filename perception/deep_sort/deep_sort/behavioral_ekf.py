@@ -32,7 +32,8 @@ class BehavioralEKF:
         self.pedestrian_radius = 0.3 # meters (or pixel equivalent)
 
         # Process Noise Covariance (Q) 
-        self._Q = np.diag([0.1, 0.1, 0.5, 0.1, 0.1]) ** 2
+        # self._Q = np.diag([0.1, 0.1, 0.5, 0.1, 0.1]) ** 2
+        self._Q = np.diag([1.0, 1.0, 1.9, 3.0, 3.0]) ** 2
 
         # Measurement Noise Covariance (R) - Assuming we measure [p_x, p_y]
         self._R = np.diag([0.2, 0.2]) ** 2

@@ -134,7 +134,7 @@ def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, 
     return frame
 
 @smart_inference_mode()
-def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data/coco.yaml',
+def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/images', data=ROOT / 'data/coco.yaml',
         imgsz=(640,640), conf_thres=0.25, iou_thres=0.45, max_det=1000,
         device='', view_img=False, nosave=False, draw_trails=False,
         project=ROOT / 'runs/detect', name='exp', exist_ok=False,
@@ -259,11 +259,12 @@ def run(weights=ROOT / 'yolo.pt', source=ROOT / 'data/images', data=ROOT / 'data
                 cv2.imshow(str(p), ims)
                 cv2.waitKey(1)
 
-    save_trajectories(data_deque, save_path=ROOT/'runs/detect/trajectories.png')
+    save_trajectories(data_deque, save_path=ROOT/f'runs/detect/trajectories_{save_plot_name}.png')
 
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov9/weights/yolov9-c.pt', help='model path')
+    parser.add_argument('--save_plot_name', nargs='+', type=str, required=True)
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/webcam')
     parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])

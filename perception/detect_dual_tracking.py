@@ -264,7 +264,7 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov9/weights/yolov9-c.pt', help='model path')
-    parser.add_argument('--save_plot_name', nargs='+', type=str, required=True)
+    parser.add_argument('--save_plot_name', type=str, required=True)
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/webcam')
     parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])

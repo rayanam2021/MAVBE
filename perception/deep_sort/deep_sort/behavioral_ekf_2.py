@@ -18,27 +18,24 @@ def _xy_from_vphi(v, phi):
 
 class BehavioralEKF:
     """
-    Extended Kalman Filter with Coordinated Turn (CT) model 
+    Extended Kalman Filter with Coordinated Turn (CT) model
     and Social Force behavior prediction.
     """
     def __init__(self, dt=0.05):
         self.dt = dt
         # State vector: [p_x, p_y, v, phi, omega]
-        self.ndim = 5 
-        
-        # Tuning parameters for Social Force
-        self.A_soc = 2.0  # Interaction strength
-        self.B_soc = 0.5  # Interaction range
-        self.pedestrian_radius = 0.3 # meters (or pixel equivalent)
+        self.ndim = 5
 
-        # Process Noise Covariance (Q) 
-        # self._Q = np.diag([0.1, 0.1, 0.5, 0.1, 0.1]) ** 2
+        # Tuning parameters for Social Force
+        self.A_soc = 2.0
+        self.B_soc = 0.5
+        self.pedestrian_radius = 0.3
+
+        # Process Noise Covariance (Q)
         self._Q = np.diag([1.0, 1.0, 1.9, 3.0, 3.0]) ** 2
 
         # Measurement Noise Covariance (R) - Assuming we measure [p_x, p_y]
         self._R = np.diag([0.002, 0.002]) ** 2
-        # self._R = np.diag([0.2, 0.2]) ** 2
-        # self._R = np.diag([100.2, 100.2]) ** 2  #filter gets bad
 
     def _compute_social_force(self, current_state, other_states):
         """Calculates the repulsive social force from neighboring pedestrians."""
@@ -48,94 +45,90 @@ class BehavioralEKF:
         for neighbor in other_states:
             nx, ny = neighbor[0], neighbor[1]
             dist = np.hypot(nx - px, ny - py)
-            
-            if dist < 0.01: # Avoid division by zero for self or identical tracks
+
+            if dist < 0.01:
                 continue
-                
-            if dist < 3.0: # Only care about neighbors within 3 meters/units
-                # Normalized direction vector pointing AWAY from neighbor
+
+            if dist < 3.0:
                 n_ij = np.array([px - nx, py - ny]) / dist
-                # Exponential repulsion
                 force_mag = self.A_soc * np.exp(((self.pedestrian_radius * 2) - dist) / self.B_soc)
                 f_soc += force_mag * n_ij
-                
+
         return f_soc
 
     def predict(self, mean, covariance, other_track_means=None):
-        """
-        EKF Prediction step using CT model + Social Force.
-        """
+        """EKF Prediction step using CT model + Social Force."""
         px, py, v, phi, omega = mean
         dt = self.dt
 
-        # 1. Compute Social Force
-        f_soc = np.array([0.0, 0.0])
+        # Social Force computed but not injected — uncomment below to enable
         if other_track_means is not None and len(other_track_means) > 0:
-            f_soc = self._compute_social_force(mean, other_track_means)
+            _f_soc = self._compute_social_force(mean, other_track_means)
+        # x_pred[0] += 0.5 * _f_soc[0] * (dt ** 2)
+        # x_pred[1] += 0.5 * _f_soc[1] * (dt ** 2)
 
-        # 2. State Transition (CT Model)
+        # --- State Transition (CT Model) ---
         x_pred = np.copy(mean)
-        
-        # Handle singularity when driving straight (omega approx 0)
+
         if abs(omega) < 1e-4:
             x_pred[0] += v * np.cos(phi) * dt
             x_pred[1] += v * np.sin(phi) * dt
         else:
             x_pred[0] += (v / omega) * (np.sin(phi + omega * dt) - np.sin(phi))
             x_pred[1] += (v / omega) * (np.cos(phi) - np.cos(phi + omega * dt))
-            
+
         x_pred[3] += omega * dt
 
-        # Apply Social Force as control input (F = ma, assume m=1)
-        # We inject the force into the position prediction directly (0.5 * a * t^2)
-        # x_pred[0] += 0.5 * f_soc[0] * (dt ** 2)
-        # x_pred[1] += 0.5 * f_soc[1] * (dt ** 2)
-        # print(x_pred)
-        # x_pred[0] +=50
-
-        # 3. Calculate Jacobian (F) for Covariance update
-        # Simplified Jacobian for the CT model
+        # --- Jacobian F ---
         F = np.eye(self.ndim)
+
         if abs(omega) < 1e-4:
             F[0, 2] = np.cos(phi) * dt
             F[0, 3] = -v * np.sin(phi) * dt
+            F[0, 4] = -0.5 * v * np.sin(phi) * dt ** 2
             F[1, 2] = np.sin(phi) * dt
             F[1, 3] = v * np.cos(phi) * dt
+            F[1, 4] = 0.5 * v * np.cos(phi) * dt ** 2
         else:
-            F[0, 2] = (np.sin(phi + omega * dt) - np.sin(phi)) / omega
-            F[0, 3] = (v / omega) * (np.cos(phi + omega * dt) - np.cos(phi))
-            F[1, 2] = (np.cos(phi) - np.cos(phi + omega * dt)) / omega
-            F[1, 3] = (v / omega) * (np.sin(phi + omega * dt) - np.sin(phi))
+            sin_phi     = np.sin(phi)
+            cos_phi     = np.cos(phi)
+            sin_phi_odt = np.sin(phi + omega * dt)
+            cos_phi_odt = np.cos(phi + omega * dt)
 
-        # 4. Update Covariance
-        covariance_pred = np.dot(F, np.dot(covariance, F.T)) + self._Q
+            F[0, 2] = (sin_phi_odt - sin_phi) / omega
+            F[0, 3] = (v / omega) * (cos_phi_odt - cos_phi)
+            F[1, 2] = (cos_phi - cos_phi_odt) / omega
+            F[1, 3] = (v / omega) * (sin_phi_odt - sin_phi)   # fixed sign
+            F[0, 4] = v * (omega * dt * cos_phi_odt - sin_phi_odt + sin_phi) / (omega ** 2)
+            F[1, 4] = v * (omega * dt * sin_phi_odt + cos_phi_odt - cos_phi) / (omega ** 2)
+
+        F[3, 4] = dt
+
+        # --- Covariance Prediction ---
+        covariance_pred = F @ covariance @ F.T + self._Q
 
         return x_pred, covariance_pred
 
     def update(self, mean, covariance, measurement):
-        """
-        EKF Update step. Measurement z = [p_x, p_y]
-        """
-        # Measurement matrix H (we only observe x and y)
+        """EKF Update step. Measurement z = [p_x, p_y]"""
         H = np.array([
             [1, 0, 0, 0, 0],
             [0, 1, 0, 0, 0]
         ])
 
-        # Innovation (Residual)
-        z_pred = np.dot(H, mean)
+        z_pred = H @ mean
         y = measurement - z_pred
 
-        # Innovation Covariance (S)
-        S = np.dot(H, np.dot(covariance, H.T)) + self._R
+        S = H @ covariance @ H.T + self._R
 
-        # Kalman Gain (K)
-        K = np.dot(covariance, np.dot(H.T, np.linalg.inv(S)))
+        # Kalman gain via solve instead of explicit inverse
+        K = scipy.linalg.solve(S, H @ covariance, assume_a='pos').T
 
-        # Update State and Covariance
-        new_mean = mean + np.dot(K, y)
-        I = np.eye(self.ndim)
-        new_covariance = np.dot((I - np.dot(K, H)), covariance)
+        new_mean = mean + K @ y
+
+        # Joseph form for numerical stability: (I-KH)P(I-KH)^T + KRK^T
+        I_KH = np.eye(self.ndim) - K @ H
+        new_covariance = I_KH @ covariance @ I_KH.T + K @ self._R @ K.T
 
         return new_mean, new_covariance
 
@@ -228,7 +221,7 @@ class BehavioralEKFFilter(object):
         return mean_8, cov_8
 
     def predict(self, mean, covariance, other_track_means=None):
-        """Predict 8D state. other_track_means: optional list of 8D means (only [:, :2] used for social force)."""
+        """Predict 8D state. other_track_means: optional list of 8D means."""
         mean_8 = np.asarray(mean, dtype=np.float64)
         cov_8 = np.asarray(covariance, dtype=np.float64)
         mean_5 = self._mean_8_to_5(mean_8)
@@ -236,6 +229,14 @@ class BehavioralEKFFilter(object):
         other_5 = [m[:2] for m in other_track_means] if other_track_means else None
         mean_5, cov_5 = self._ekf.predict(mean_5, cov_5, other_track_means=other_5)
         return self._mean_cov_5_to_8(mean_5, cov_5, mean_8, cov_8)
+
+    @staticmethod
+    def _nearest_psd(matrix, min_eig=1e-4):
+        """Project matrix to nearest positive definite matrix via eigenvalue clamping."""
+        B = (matrix + matrix.T) / 2
+        eigvals, eigvecs = np.linalg.eigh(B)
+        eigvals = np.maximum(eigvals, min_eig)
+        return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
     def project(self, mean, covariance):
         """Project state to measurement space (x, y, a, h)."""
@@ -248,6 +249,7 @@ class BehavioralEKFFilter(object):
         innovation_cov = np.diag(np.square(std))
         mean_proj = mean[:4].copy()
         cov_proj = covariance[:4, :4].copy() + innovation_cov
+        cov_proj = self._nearest_psd(cov_proj)
         return mean_proj, cov_proj
 
     def update(self, mean, covariance, measurement):
@@ -280,6 +282,10 @@ class BehavioralEKFFilter(object):
             measurements = np.asarray(measurements)[:, :2]
         else:
             measurements = np.asarray(measurements)
+
+        # Re-clamp after any slicing
+        cov_proj = self._nearest_psd(cov_proj)
+
         cholesky_factor = np.linalg.cholesky(cov_proj)
         d = measurements - mean_proj
         z = scipy.linalg.solve_triangular(

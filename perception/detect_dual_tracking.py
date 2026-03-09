@@ -138,7 +138,7 @@ def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, 
 
 @smart_inference_mode()
 def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/images', data=ROOT / 'data/coco.yaml',
-        imgsz=(640,640), conf_thres=0.75, iou_thres=0.55, max_det=1000,
+        imgsz=(640,640), conf_thres=0.75, iou_thres=0.85, max_det=1000,
         device='', view_img=False, nosave=False, draw_trails=False,
         project=ROOT / 'runs/detect', name='exp', exist_ok=False,
         half=False, dnn=False, vid_stride=1):
@@ -203,7 +203,7 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
     # metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance=0.2, nn_budget=100)
     metric = nn_matching.NearestNeighborDistanceMetric(
         metric="cosine",
-        matching_threshold=0.4,  # this was max_cosine_distance
+        matching_threshold=0.5,  # this was max_cosine_distance
         budget=100               # this was nn_budget
     )
     tracker = Tracker(metric)
@@ -266,47 +266,47 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
                     oids.append(int(cls))
 
                 # Convert YOLO detections → Deep SORT Detection objects
+                # detections = []
+                # for j in range(len(xywh_bboxs)):
+                #     cx, cy, w, h = xywh_bboxs[j]
+                #     conf = confs[j]
+                #     x_tl = cx - w/2
+                #     y_tl = cy - h/2
+                #     tlwh = [x_tl, y_tl, w, h]
+                #     # feature = np.zeros(128)
+                #     # feature = np.ones(128) * 1e-6
+                #     # detections.append(Detection(tlwh, conf, feature))
+
                 detections = []
+
                 for j in range(len(xywh_bboxs)):
                     cx, cy, w, h = xywh_bboxs[j]
                     conf = confs[j]
-                    x_tl = cx - w/2
-                    y_tl = cy - h/2
+                    x_tl = int(cx - w/2)
+                    y_tl = int(cy - h/2)
+                    w = int(w)
+                    h = int(h)
+
+                    # Crop detection from original frame
+                    crop = im0[y_tl:y_tl+h, x_tl:x_tl+w]
+
+                    if crop.size == 0:
+                        continue
+
+                    # Convert BGR → RGB
+                    crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+                    # Apply transform
+                    input_tensor = reid_transform(crop).unsqueeze(0).to(device)
+
+                    with torch.no_grad():
+                        features = reid_model(input_tensor)
+
+                    feature = features.cpu().numpy().flatten()
+                    feature = feature / np.linalg.norm(feature)
+
                     tlwh = [x_tl, y_tl, w, h]
-                    # feature = np.zeros(128)
-                    # feature = np.ones(128) * 1e-6
-                    # detections.append(Detection(tlwh, conf, feature))
-
-                    detections = []
-
-                    for j in range(len(xywh_bboxs)):
-                        cx, cy, w, h = xywh_bboxs[j]
-                        conf = confs[j]
-                        x_tl = int(cx - w/2)
-                        y_tl = int(cy - h/2)
-                        w = int(w)
-                        h = int(h)
-
-                        # Crop detection from original frame
-                        crop = im0[y_tl:y_tl+h, x_tl:x_tl+w]
-
-                        if crop.size == 0:
-                            continue
-
-                        # Convert BGR → RGB
-                        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-
-                        # Apply transform
-                        input_tensor = reid_transform(crop).unsqueeze(0).to(device)
-
-                        with torch.no_grad():
-                            features = reid_model(input_tensor)
-
-                        feature = features.cpu().numpy().flatten()
-                        feature = feature / np.linalg.norm(feature)
-
-                        tlwh = [x_tl, y_tl, w, h]
-                        detections.append(Detection(tlwh, conf, feature))
+                    detections.append(Detection(tlwh, conf, feature))
 
 
 
@@ -356,7 +356,7 @@ def parse_opt():
     parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])
     parser.add_argument('--conf-thres', type=float, default=0.75)
-    parser.add_argument('--iou-thres', type=float, default=0.45)
+    parser.add_argument('--iou-thres', type=float, default=0.65)
     parser.add_argument('--max-det', type=int, default=1000)
     parser.add_argument('--device', default='')
     parser.add_argument('--view-img', action='store_true')

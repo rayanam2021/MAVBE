@@ -1,7 +1,7 @@
 # vim: expandtab:ts=4:sw=4
 from __future__ import absolute_import
 import numpy as np
-from . import behavioral_ekf
+from . import behavioral_ekf_2 as behavioral_ekf
 # from . import kalman_filter as behavioral_ekf
 from . import linear_assignment
 from . import iou_matching
@@ -38,7 +38,7 @@ class Tracker:
 
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=1):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3):
         self.metric = metric
         self.max_iou_distance = max_iou_distance
         self.max_age = 3000
@@ -105,35 +105,61 @@ class Tracker:
 
         #     return cost_matrix
 
-        def gated_metric(tracks, dets, track_indices, detection_indices):
+        # def gated_metric(tracks, dets, track_indices, detection_indices):
 
+        #     features = np.array([dets[i].feature for i in detection_indices])
+        #     targets = np.array([tracks[i].track_id for i in track_indices])
+
+        #     # Appearance cost
+        #     appearance_cost = self.metric.distance(features, targets)
+
+        #     # Motion (Mahalanobis) cost
+        #     measurements = np.asarray([dets[i].to_xyah() for i in detection_indices])
+
+        #     motion_cost = np.zeros_like(appearance_cost)
+
+        #     for row, track_idx in enumerate(track_indices):
+        #         track = tracks[track_idx]
+
+        #         # Mahalanobis distance for this track to all detections
+        #         gating_dist = self.kf.gating_distance(
+        #             track.mean, track.covariance, measurements, only_position=False
+        #         )
+
+        #         motion_cost[row, :] = gating_dist
+
+        #     motion_cost = motion_cost / (motion_cost.max() + 1e-6)
+
+        #     # Weighted fusion
+        #     #current status on the pedestrian turning around video - lambda 1 works, lambda 0 doesnt work with a bad ekf
+        #     lambda_ = 0.0   # appearance weight
+        #     cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
+
+        #     return cost_matrix
+
+
+        def gated_metric(tracks, dets, track_indices, detection_indices):
             features = np.array([dets[i].feature for i in detection_indices])
             targets = np.array([tracks[i].track_id for i in track_indices])
-
-            # Appearance cost
             appearance_cost = self.metric.distance(features, targets)
 
-            # Motion (Mahalanobis) cost
             measurements = np.asarray([dets[i].to_xyah() for i in detection_indices])
 
-            motion_cost = np.zeros_like(appearance_cost)
+            # Gate using chi2 threshold instead of relative normalization
+            gate_threshold = behavioral_ekf.chi2inv95[4]  # 4D measurement space
 
+            motion_cost = np.full_like(appearance_cost, 1e5)  # default: large cost
             for row, track_idx in enumerate(track_indices):
                 track = tracks[track_idx]
-
-                # Mahalanobis distance for this track to all detections
                 gating_dist = self.kf.gating_distance(
                     track.mean, track.covariance, measurements, only_position=False
                 )
+                # Only allow matches within the chi2 gate
+                motion_cost[row, gating_dist > gate_threshold] = 1e5
+                motion_cost[row, gating_dist <= gate_threshold] = gating_dist[gating_dist <= gate_threshold]
 
-                motion_cost[row, :] = gating_dist
-
-            motion_cost = motion_cost / (motion_cost.max() + 1e-6)
-
-            # Weighted fusion
-            lambda_ = 0.7   # appearance weight
+            lambda_ = 0.5
             cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
-
             return cost_matrix
 
         # Split track set into confirmed and unconfirmed tracks.

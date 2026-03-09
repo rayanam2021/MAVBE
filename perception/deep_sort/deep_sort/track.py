@@ -128,10 +128,12 @@ class Track:
             self.mean, self.covariance = kf.predict(self.mean, self.covariance)
         self.age += 1
         self.time_since_update += 1
-
         # 🔥 Inflate uncertainty if track missed detections
         if self.time_since_update > 1:
-            self.covariance *= 1.2   # you can tune 1.1–1.5
+            inflation = 1.5 ** self.time_since_update
+
+            print("Occlusions")
+            self.covariance *= inflation   # you can tune 1.1–1.5
 
     def update(self, kf, detection):
         """Perform Kalman filter measurement update step and update the feature

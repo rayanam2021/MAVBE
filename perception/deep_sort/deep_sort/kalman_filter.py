@@ -173,8 +173,13 @@ class KalmanFilter(object):
         """
         projected_mean, projected_cov = self.project(mean, covariance)
 
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False)
+        try:
+            chol_factor, lower = scipy.linalg.cho_factor(
+                projected_cov, lower=True, check_finite=False)
+        except np.linalg.LinAlgError:
+            # Covariance not positive definite (e.g. after inflation); re-init from measurement
+            return self.initiate(measurement)
+
         kalman_gain = scipy.linalg.cho_solve(
             (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
             check_finite=False).T
@@ -220,7 +225,13 @@ class KalmanFilter(object):
             mean, covariance = mean[:2], covariance[:2, :2]
             measurements = measurements[:, :2]
 
-        cholesky_factor = np.linalg.cholesky(covariance)
+        n = measurements.shape[0] if measurements.ndim > 1 else 1
+        try:
+            cholesky_factor = np.linalg.cholesky(covariance)
+        except np.linalg.LinAlgError:
+            # Covariance not positive definite (e.g. after missed updates); gate out this track
+            return np.full(n, 1e10)
+
         d = measurements - mean
         z = scipy.linalg.solve_triangular(
             cholesky_factor, d.T, lower=True, check_finite=False,

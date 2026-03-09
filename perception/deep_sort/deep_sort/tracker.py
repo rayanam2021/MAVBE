@@ -160,7 +160,7 @@ class Tracker:
                 motion_cost[row, gating_dist > gate_threshold] = 1e5
                 motion_cost[row, gating_dist <= gate_threshold] = gating_dist[gating_dist <= gate_threshold]
 
-            lambda_ = 0.0
+            lambda_ = 0.5
             cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
             return cost_matrix
 

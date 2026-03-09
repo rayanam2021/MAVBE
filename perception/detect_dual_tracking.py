@@ -212,6 +212,8 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
     for path, im, im0s, vid_cap, s in dataset:
+        # One-liner to add 5% salt, 5% pepper noise, and a 5x5 Gaussian blur
+        #im0s = cv2.GaussianBlur(np.where(np.random.rand(*im0s.shape[:2], 1) < 0.15, 0, np.where(np.random.rand(*im0s.shape[:2], 1) > 0.85, 255, im0s)).astype(np.uint8), (5, 5), 0)
         # print("here")
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)

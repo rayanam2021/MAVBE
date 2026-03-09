@@ -59,6 +59,8 @@ def run(args):
 
     blueprint_library = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points()
+    #x=-52.310936, y=-1.585238, z=0.600000
+    # print(spawn_points)
     if not spawn_points:
         print("No vehicle spawn points in this map.")
         return
@@ -103,7 +105,7 @@ def run(args):
     controllers = []
     next_pedestrian_time = 1.0  # first pedestrian at t=10s
     last_redirect_time = 0.0     # for random walk redirect every 5s
-    duration = 30.0
+    duration = 20.0
     sim_time = 0.0
     dt = 1.0 / args.fps
 
@@ -113,14 +115,14 @@ def run(args):
             sim_time += dt
 
             # Spawn a new pedestrian every 10 seconds
-            if sim_time >= next_pedestrian_time:
+            if sim_time >= next_pedestrian_time and next_pedestrian_time<=2.0:
                 next_pedestrian_time += 1.0
                 try:
                     # Spawn near the vehicle (offset in vehicle frame)
                     v_t = vehicle.get_transform()
                     # Offset 5–12 m in front/side
-                    dx = random.uniform(5, 12) * (1 if random.random() > 0.5 else -1)
-                    dy = random.uniform(5, 6) * (1 if random.random() > 0.5 else -1)
+                    dx = random.uniform(2, 6) * (1 if random.random() > 0.5 else 1)
+                    dy = random.uniform(-5, 10) * (1 if random.random() > 0.5 else -1)
                     loc = v_t.location
                     spawn_loc = carla.Location(
                         x=loc.x + dx,
@@ -204,7 +206,7 @@ def main():
     )
     parser.add_argument('--host', default='127.0.0.1', help='CARLA host')
     parser.add_argument('--port', type=int, default=2000, help='CARLA port')
-    parser.add_argument('--output', default='carla_pedestrian_60s.mp4', help='Output video path')
+    parser.add_argument('--output', default='carla_pedestrian_60s_new_one_ped.mp4', help='Output video path')
     parser.add_argument('--fps', type=float, default=20.0, help='Simulation and video FPS')
     parser.add_argument('--width', type=int, default=1920, help='Camera width')
     parser.add_argument('--height', type=int, default=1080, help='Camera height')

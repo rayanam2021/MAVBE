@@ -2,6 +2,7 @@
 from __future__ import absolute_import
 import numpy as np
 from . import behavioral_ekf_2 as behavioral_ekf
+from . import behavioral_imm as _imm
 # from . import kalman_filter as behavioral_ekf
 from . import linear_assignment
 from . import iou_matching
@@ -44,7 +45,8 @@ class Tracker:
         self.max_age = 3000
         self.n_init = n_init
 
-        self.kf = behavioral_ekf.BehavioralEKFFilter()
+        self.kf = _imm.BehavioralIMMFilter()
+        #self.kf = behavioral_ekf.BehavioralEKFFilter()
         # self.kf = behavioral_ekf.KalmanFilter()
         self.tracks = []
         self._next_id = 1
@@ -158,7 +160,7 @@ class Tracker:
                 motion_cost[row, gating_dist > gate_threshold] = 1e5
                 motion_cost[row, gating_dist <= gate_threshold] = gating_dist[gating_dist <= gate_threshold]
 
-            lambda_ = 0.5
+            lambda_ = 0.0
             cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
             return cost_matrix
 

@@ -236,7 +236,10 @@ class BehavioralEKFFilter(object):
         B = (matrix + matrix.T) / 2
         eigvals, eigvecs = np.linalg.eigh(B)
         eigvals = np.maximum(eigvals, min_eig)
-        return eigvecs @ np.diag(eigvals) @ eigvecs.T
+        result = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        # Diagonal bump ensures strict PD after floating-point reconstruction
+        result += np.eye(len(result)) * min_eig
+        return result
 
     def project(self, mean, covariance):
         """Project state to measurement space (x, y, a, h)."""
@@ -283,10 +286,17 @@ class BehavioralEKFFilter(object):
         else:
             measurements = np.asarray(measurements)
 
-        # Re-clamp after any slicing
+        # Re-clamp after any slicing, then add trace-relative regularisation so
+        # the bump scales with covariance magnitude (handles occlusion inflation).
         cov_proj = self._nearest_psd(cov_proj)
+        n = len(cov_proj)
+        reg = max(np.trace(cov_proj) * 1e-6, 1e-4)
+        cov_proj = cov_proj + np.eye(n) * reg
 
-        cholesky_factor = np.linalg.cholesky(cov_proj)
+        try:
+            cholesky_factor = np.linalg.cholesky(cov_proj)
+        except np.linalg.LinAlgError:
+            return np.full(len(measurements), 1e5)
         d = measurements - mean_proj
         z = scipy.linalg.solve_triangular(
             cholesky_factor, d.T, lower=True, check_finite=False, overwrite_b=True

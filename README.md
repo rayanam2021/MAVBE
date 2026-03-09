@@ -61,8 +61,38 @@ Run from `perception/yolov9/`; see `perception/yolov9/README.md` for data and op
 
 | What you want | File to run | Where to run from | Notes |
 |---------------|-------------|-------------------|--------|
+| **Record scenario + video + ground truth (image frame)** | `carla_integration/scenario_pedestrian_crossing.py` | Repo root or `carla_integration/` | Creates scenario, records camera video and a GT file in **camera/image coordinates** (MOT format). Use for the evaluation pipeline below. |
+| **Multi-ped scenario (3 peds, filter-based brake)** | `carla_integration/scenario_pedestrian_crossing_multi.py` | Repo root or `carla_integration/` | Three AI pedestrians (two on sides, one child crossing); car drives and brakes only when the filter predicts collision. Use `--no-filter` to use GT for brake logic if the perception stack is not available. |
 | **Spawn vehicle + pedestrian every 10s, save 60s video** | `carla_integration/spawn_pedestrian_video.py` | Repo root or `carla_integration/` | Requires CARLA server running and `numpy`, `opencv-python`. Saves `carla_pedestrian_60s.mp4` by default. |
-| **CARLA auto-control demo** (vehicle + sensors) | `carla_integration/trajectory_planning.py` | Repo root or `carla_integration/` | Requires CARLA server, Python API, and `agents.navigation` modules. Not yet wired to the MOT/Behavioral EKF pipeline. |
+| **CARLA auto-control demo** (vehicle + sensors) | `carla_integration/trajectory_planning.py` | Repo root or `carla_integration/` | Requires CARLA server, Python API, and `agents.navigation` modules. |
+
+---
+
+### Evaluation pipeline (filter performance vs ground truth)
+
+Ground truth is **always in the camera/image frame**: 3D positions from CARLA are projected into 2D using the camera intrinsics, so GT bboxes are in the same pixel space as the tracker output. Evaluation then compares distance from GT (RMSE, ADE, FDE) and ID switches.
+
+1. **Record scenario + video + GT (image frame)**  
+   Run the CARLA scenario script; it writes the video and a GT file in MOT format (image coordinates).
+   ```bash
+   python carla_integration/scenario_pedestrian_crossing.py --output my_scenario.mp4 --gt-out my_scenario_gt.txt
+   ```
+
+2. **Run detection + tracking on the video and save tracks**  
+   Run `detect_dual_tracking` on the recorded video and export tracker output in MOT format.
+   ```bash
+   python perception/detect_dual_tracking.py --source my_scenario.mp4 --save_plot_name my_run --save-tracks my_scenario_pred.txt
+   ```
+   (Run from repo root; ensure `perception` is on path.)
+
+3. **Run evaluation (distance from GT + ID switches)**  
+   Compare GT and predictions with the evaluation script.
+   ```bash
+   python evaluation/run_metrics.py --gt my_scenario_gt.txt --pred my_scenario_pred.txt --out report.txt
+   ```
+   Output: MOTA, MOTP, IDF1, **IDSW**, **RMSE**, ADE, FDE, etc. (distance metrics are in pixels).
+
+See `evaluation/README.md` for metric definitions and I/O details.
 
 ---
 

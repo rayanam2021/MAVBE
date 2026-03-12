@@ -54,6 +54,8 @@ import torchreid
 
 # Global buffer for trails
 data_deque = {}
+all_trajectories = {}
+
 
 # Class names (COCO)
 def classNames():
@@ -119,6 +121,11 @@ def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, 
         if id not in data_deque:
             data_deque[id] = deque(maxlen=64)
         data_deque[id].appendleft(center)
+
+        # ← Add this: persist full history separately
+        if id not in all_trajectories:
+            all_trajectories[id] = []
+        all_trajectories[id].append(center)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{id}:{className[cat]}"
@@ -346,7 +353,9 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         vid_writer.release()
         print(f"[INFO] Video saved to {save_video_path}")
 
-    save_trajectories(data_deque, save_path=ROOT/f'runs/detect/trajectories_{save_plot_name}.png')
+    # save_trajectories(data_deque, save_path=ROOT/f'runs/detect/trajectories_{save_plot_name}.png')
+    save_trajectories(all_trajectories, save_path=ROOT/f'runs/detect/trajectories_{save_plot_name}.png')
+
 
 def parse_opt():
     parser = argparse.ArgumentParser()

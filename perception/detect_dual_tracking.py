@@ -4,6 +4,7 @@ import platform
 import sys
 from pathlib import Path
 import math
+import glob
 import torch
 import numpy as np
 from collections import deque
@@ -102,6 +103,41 @@ def save_trajectories(data_deque, save_path='trajectories.png'):
     print(f"[INFO] Trajectory plot saved to {save_path}")
     plt.close()
 
+def load_depth_image(depth_path, depth_format='carla_rgb'):
+    """Load a depth image and return a float32 array of depth values in metres.
+
+    Supported formats:
+      'carla_rgb'  - CARLA packed-RGB depth: depth_m = (R + G*256 + B*65536) / (256^3-1) * 1000
+      'uint16_mm'  - 16-bit PNG with values in millimetres: depth_m = pixel / 1000.0
+    """
+    img = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if depth_format == 'carla_rgb':
+        img = img.astype(np.float64)
+        # OpenCV loads as BGR; CARLA stores R in channel 2, G in channel 1, B in channel 0
+        depth_m = (img[:, :, 2] + img[:, :, 1] * 256.0 + img[:, :, 0] * 65536.0) / (256.0**3 - 1) * 1000.0
+    elif depth_format == 'uint16_mm':
+        depth_m = img.astype(np.float64) / 1000.0
+    else:
+        raise ValueError(f"Unknown depth_format: {depth_format}. Use 'carla_rgb' or 'uint16_mm'.")
+    return depth_m.astype(np.float32)
+
+
+def unproject_pixel(u, v, depth_m, fx, fy, cx, cy):
+    """Back-project image pixel (u, v) with depth_m metres to 3D camera-frame coords.
+
+    Returns [pX, pZ, pY] following the IMM convention:
+      pX = camera-right   (metres)
+      pZ = camera-forward / depth  (metres)
+      pY = camera-down    (metres)
+    """
+    pX = (u - cx) * depth_m / fx
+    pY = (v - cy) * depth_m / fy
+    pZ = depth_m
+    return np.array([pX, pZ, pY], dtype=np.float64)
+
+
 def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, offset=(0,0)):
     height, width, _ = frame.shape
     for key in list(data_deque):
@@ -141,7 +177,9 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         imgsz=(640,640), conf_thres=0.75, iou_thres=0.85, max_det=1000,
         device='', view_img=False, nosave=False, draw_trails=False,
         project=ROOT / 'runs/detect', name='exp', exist_ok=False,
-        half=False, dnn=False, vid_stride=1):
+        half=False, dnn=False, vid_stride=1,
+        depth_dir=None, depth_format='carla_rgb',
+        fx=400.0, fy=400.0, cx_intr=400.0, cy_intr=300.0):
 
     source = str(source)
     save_img = not nosave
@@ -199,6 +237,14 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
     # vid_path, vid_writer = [None]*bs, [None]*bs
 
+    # Load depth image file list (sorted) if a depth directory was provided.
+    depth_files = []
+    if depth_dir is not None:
+        depth_dir = Path(depth_dir)
+        depth_files = sorted(depth_dir.glob('*.png')) + sorted(depth_dir.glob('*.exr'))
+        depth_files = sorted(depth_files)
+        print(f"[INFO] Found {len(depth_files)} depth images in {depth_dir}")
+
     # Initialize in-repo tracker (Behavioral EKF)
     # metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance=0.2, nn_budget=100)
     metric = nn_matching.NearestNeighborDistanceMetric(
@@ -206,11 +252,13 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         matching_threshold=0.5,  # this was max_cosine_distance
         budget=100               # this was nn_budget
     )
-    tracker = Tracker(metric)
+    tracker = Tracker(metric, fx=fx, fy=fy, cx=cx_intr, cy=cy_intr,
+                      has_depth=(depth_dir is not None))
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    depth_frame_idx = 0  # sequential counter for depth file indexing
     for path, im, im0s, vid_cap, s in dataset:
         # One-liner to add 5% salt, 5% pepper noise, and a 5x5 Gaussian blur
         #im0s = cv2.GaussianBlur(np.where(np.random.rand(*im0s.shape[:2], 1) < 0.15, 0, np.where(np.random.rand(*im0s.shape[:2], 1) > 0.85, 255, im0s)).astype(np.uint8), (5, 5), 0)
@@ -229,6 +277,12 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres, max_det=max_det)
+
+        # Load the depth image for this frame (if depth directory provided).
+        depth_img = None
+        if depth_files and depth_frame_idx < len(depth_files):
+            depth_img = load_depth_image(depth_files[depth_frame_idx], depth_format)
+        depth_frame_idx += 1
 
         for i, det in enumerate(pred):
             seen += 1
@@ -308,7 +362,19 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
                     feature = feature / np.linalg.norm(feature)
 
                     tlwh = [x_tl, y_tl, w, h]
-                    detections.append(Detection(tlwh, conf, feature))
+
+                    # Compute 3D world position from depth image (if available).
+                    world_pos = None
+                    if depth_img is not None:
+                        # Sample depth at bbox center; clamp to image bounds.
+                        dh, dw = depth_img.shape[:2]
+                        u_d = int(np.clip(cx, 0, dw - 1))
+                        v_d = int(np.clip(cy, 0, dh - 1))
+                        d = float(depth_img[v_d, u_d])
+                        if d > 0.1:  # discard zero/invalid depth readings
+                            world_pos = unproject_pixel(cx, cy, d, fx, fy, cx_intr, cy_intr)
+
+                    detections.append(Detection(tlwh, conf, feature, world_pos=world_pos))
 
 
 
@@ -370,6 +436,17 @@ def parse_opt():
     parser.add_argument('--half', action='store_true')
     parser.add_argument('--dnn', action='store_true')
     parser.add_argument('--vid-stride', type=int, default=1)
+    # 3D world-frame tracking args
+    parser.add_argument('--depth_dir', type=str, default=None,
+                        help='Directory of depth images (one per video frame, sorted by name). '
+                             'When provided, IMM runs in 3D world-frame coordinates.')
+    parser.add_argument('--depth_format', type=str, default='carla_rgb',
+                        choices=['carla_rgb', 'uint16_mm'],
+                        help='Depth image encoding: carla_rgb (CARLA packed RGB) or uint16_mm (16-bit mm).')
+    parser.add_argument('--fx', type=float, default=400.0, help='Camera focal length x (pixels)')
+    parser.add_argument('--fy', type=float, default=400.0, help='Camera focal length y (pixels)')
+    parser.add_argument('--cx_intr', type=float, default=400.0, help='Camera principal point x (pixels)')
+    parser.add_argument('--cy_intr', type=float, default=300.0, help='Camera principal point y (pixels)')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1
     print_args(vars(opt))

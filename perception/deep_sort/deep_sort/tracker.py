@@ -39,13 +39,15 @@ class Tracker:
 
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3,
+                 fx=400.0, fy=400.0, cx=400.0, cy=300.0, has_depth=False):
         self.metric = metric
         self.max_iou_distance = max_iou_distance
         self.max_age = 3000
         self.n_init = n_init
 
-        self.kf = _imm.BehavioralIMMFilter()
+        self.kf = _imm.BehavioralIMMFilter(fx=fx, fy=fy, cx=cx, cy=cy,
+                                            has_depth=has_depth)
         #self.kf = behavioral_ekf.BehavioralEKFFilter()
         # self.kf = behavioral_ekf.KalmanFilter()
         self.tracks = []
@@ -193,7 +195,7 @@ class Tracker:
         return matches, unmatched_tracks, unmatched_detections
 
     def _initiate_track(self, detection):
-        mean, covariance = self.kf.initiate(detection.to_xyah())
+        mean, covariance = self.kf.initiate(detection.to_xyah(), world_pos=detection.world_pos)
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age,
             detection.feature))

@@ -26,10 +26,13 @@ class Detection(object):
 
     """
 
-    def __init__(self, tlwh, confidence, feature):
+    def __init__(self, tlwh, confidence, feature, world_pos=None):
         self.tlwh = np.asarray(tlwh, dtype=np.float64)
         self.confidence = float(confidence)
         self.feature = np.asarray(feature, dtype=np.float32)
+        # 3D world-frame position [pX, pZ, pY] in camera frame (metres).
+        # None when depth images are not available (falls back to 2D tracking).
+        self.world_pos = np.asarray(world_pos, dtype=np.float64) if world_pos is not None else None
 
     def to_tlbr(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,

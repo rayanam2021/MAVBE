@@ -147,7 +147,8 @@ class Track:
 
         """
         self.mean, self.covariance = kf.update(
-            self.mean, self.covariance, detection.to_xyah())
+            self.mean, self.covariance, detection.to_xyah(),
+            world_pos=detection.world_pos)
         self.features.append(detection.feature)
 
         self.hits += 1

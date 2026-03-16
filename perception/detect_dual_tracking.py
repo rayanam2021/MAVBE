@@ -378,7 +378,7 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
 
 
 
-                print(len(detections))
+                print("NO OF DETECTIONS: ", len(detections))
                 # Update tracker
                 tracker.predict()
                 tracker.update(detections)

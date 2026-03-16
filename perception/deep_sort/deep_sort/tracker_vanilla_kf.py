@@ -8,7 +8,7 @@ import numpy as np
 from . import kalman_filter
 from . import linear_assignment
 from . import iou_matching
-from .track import Track
+from .track import Track, TrackState
 
 
 class Tracker:
@@ -16,13 +16,19 @@ class Tracker:
     Multi-target tracker using vanilla Kalman filter (constant velocity model).
     Same interface as deep_sort.tracker.Tracker but predict() does not pass
     other_track_means, so the standard KalmanFilter is used as-is.
+
+    Track.update() is bypassed here because the shared Track class expects
+    world_pos-based updates (for the IMM tracker).  The vanilla KF operates
+    in 2-D image space [x, y, a, h], so we inline the KF update directly.
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3,
+                 lambda_=0.0):
         self.metric = metric
         self.max_iou_distance = max_iou_distance
         self.max_age = max_age
         self.n_init = n_init
+        self.lambda_ = lambda_
         self.kf = kalman_filter.KalmanFilter()
         self.tracks = []
         self._next_id = 1
@@ -32,11 +38,24 @@ class Tracker:
         for track in self.tracks:
             track.predict(self.kf, other_track_means=None)
 
+    def _update_track(self, track, detection):
+        """KF update using 2D xyah measurement (bypasses Track.update which
+        requires world_pos for the IMM tracker)."""
+        track.mean, track.covariance = self.kf.update(
+            track.mean, track.covariance, detection.to_xyah())
+        if detection.tlwh is not None:
+            track._last_tlwh = np.array(detection.tlwh, dtype=float)
+        track.features.append(detection.feature)
+        track.hits += 1
+        track.time_since_update = 0
+        if track.state == TrackState.Tentative and track.hits >= track._n_init:
+            track.state = TrackState.Confirmed
+
     def update(self, detections):
         """Perform measurement update and track management."""
         matches, unmatched_tracks, unmatched_detections = self._match(detections)
         for track_idx, detection_idx in matches:
-            self.tracks[track_idx].update(self.kf, detections[detection_idx])
+            self._update_track(self.tracks[track_idx], detections[detection_idx])
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
@@ -68,8 +87,7 @@ class Tracker:
                 )
                 motion_cost[row, gating_dist > gate_threshold] = 1e5
                 motion_cost[row, gating_dist <= gate_threshold] = gating_dist[gating_dist <= gate_threshold]
-            lambda_ = 0.0
-            cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
+            cost_matrix = self.lambda_ * appearance_cost + (1 - self.lambda_) * motion_cost
             return cost_matrix
 
         confirmed_tracks = [i for i, t in enumerate(self.tracks) if t.is_confirmed()]
@@ -90,7 +108,8 @@ class Tracker:
 
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
+        tlwh = np.array(detection.tlwh, dtype=float) if detection.tlwh is not None else None
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age,
-            detection.feature))
+            detection.feature, tlwh=tlwh))
         self._next_id += 1

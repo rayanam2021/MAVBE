@@ -252,8 +252,10 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         matching_threshold=0.5,  # this was max_cosine_distance
         budget=100               # this was nn_budget
     )
-    tracker = Tracker(metric, fx=fx, fy=fy, cx=cx_intr, cy=cy_intr,
-                      has_depth=(depth_dir is not None))
+    # tracker = Tracker(metric, fx=fx, fy=fy, cx=cx_intr, cy=cy_intr,
+    #                   has_depth=(depth_dir is not None))
+
+    tracker = Tracker(metric, fallback_mode="3d", fallback_3d_threshold=0.6)
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))

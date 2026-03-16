@@ -1,0 +1,8 @@
+{
+  "total_rmse": NaN,
+  "per_track_rmse": {},
+  "id_switches": 0,
+  "n_gt_tracks": 1,
+  "n_pred_tracks": 0,
+  "match_map": {}
+}

@@ -1,0 +1,12 @@
+{
+  "total_rmse": 0.10061411533777223,
+  "per_track_rmse": {
+    "1": 0.10061411533777223
+  },
+  "id_switches": 0,
+  "n_gt_tracks": 1,
+  "n_pred_tracks": 1,
+  "match_map": {
+    "1": 1
+  }
+}

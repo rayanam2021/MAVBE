@@ -1,11 +1,9 @@
 # vim: expandtab:ts=4:sw=4
 from __future__ import absolute_import
 import numpy as np
-from . import behavioral_ekf_2 as behavioral_ekf
 from . import behavioral_imm as _imm
-# from . import kalman_filter as behavioral_ekf
-from . import linear_assignment
 from . import iou_matching
+from . import linear_assignment
 from .track import Track
 
 
@@ -39,17 +37,35 @@ class Tracker:
 
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=3000, n_init=3,
-                 fx=400.0, fy=400.0, cx=400.0, cy=300.0, has_depth=False):
+    def __init__(self, metric, max_age=3000, n_init=3,
+                 fallback_mode="iou", fallback_3d_threshold=2.0,
+                 max_iou_distance=0.7, lambda_=0.5):
+        """
+        Parameters
+        ----------
+        fallback_mode : str
+            Stage-2 fallback matching strategy for unconfirmed / recently-missed
+            tracks.  Options:
+              "3d"  – Euclidean distance between last observed world positions
+                      (no filter involved).  Threshold: fallback_3d_threshold m.
+              "iou" – Bounding-box IOU on the cached last-detected bbox.
+                      Threshold: max_iou_distance.
+        fallback_3d_threshold : float
+            Maximum Euclidean distance (metres) allowed in "3d" fallback mode.
+        max_iou_distance : float
+            Maximum 1-IOU cost allowed in "iou" fallback mode.
+        lambda_ : float
+            Weight for appearance vs motion cost (0=motion only, 1=appearance only).
+        """
         self.metric = metric
-        self.max_iou_distance = max_iou_distance
-        self.max_age = 3000
+        self.max_age = max_age
         self.n_init = n_init
+        self.fallback_mode = fallback_mode
+        self.fallback_3d_threshold = fallback_3d_threshold
+        self.max_iou_distance = max_iou_distance
+        self.lambda_ = lambda_
 
-        self.kf = _imm.BehavioralIMMFilter(fx=fx, fy=fy, cx=cx, cy=cy,
-                                            has_depth=has_depth)
-        #self.kf = behavioral_ekf.BehavioralEKFFilter()
-        # self.kf = behavioral_ekf.KalmanFilter()
+        self.kf = _imm.BehavioralIMMFilter()
         self.tracks = []
         self._next_id = 1
 
@@ -98,105 +114,100 @@ class Tracker:
             np.asarray(features), np.asarray(targets), active_targets)
 
     def _match(self, detections):
+        gate_threshold = _imm.chi2inv95[3]  # 3-D world-space chi2 gate
 
-        # def gated_metric(tracks, dets, track_indices, detection_indices):
-        #     features = np.array([dets[i].feature for i in detection_indices])
-        #     targets = np.array([tracks[i].track_id for i in track_indices])
-        #     cost_matrix = self.metric.distance(features, targets)
-        #     cost_matrix = linear_assignment.gate_cost_matrix(
-        #         self.kf, cost_matrix, tracks, dets, track_indices,
-        #         detection_indices)
-
-        #     return cost_matrix
-
-        # def gated_metric(tracks, dets, track_indices, detection_indices):
-
-        #     features = np.array([dets[i].feature for i in detection_indices])
-        #     targets = np.array([tracks[i].track_id for i in track_indices])
-
-        #     # Appearance cost
-        #     appearance_cost = self.metric.distance(features, targets)
-
-        #     # Motion (Mahalanobis) cost
-        #     measurements = np.asarray([dets[i].to_xyah() for i in detection_indices])
-
-        #     motion_cost = np.zeros_like(appearance_cost)
-
-        #     for row, track_idx in enumerate(track_indices):
-        #         track = tracks[track_idx]
-
-        #         # Mahalanobis distance for this track to all detections
-        #         gating_dist = self.kf.gating_distance(
-        #             track.mean, track.covariance, measurements, only_position=False
-        #         )
-
-        #         motion_cost[row, :] = gating_dist
-
-        #     motion_cost = motion_cost / (motion_cost.max() + 1e-6)
-
-        #     # Weighted fusion
-        #     #current status on the pedestrian turning around video - lambda 1 works, lambda 0 doesnt work with a bad ekf
-        #     lambda_ = 0.0   # appearance weight
-        #     cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
-
-        #     return cost_matrix
-
+        def _world_positions(det_indices):
+            """Return list of world_pos arrays; None entries get zeros (gated out)."""
+            positions, valid = [], []
+            for i in det_indices:
+                wp = detections[i].world_pos
+                positions.append(wp if wp is not None else np.zeros(3))
+                valid.append(wp is not None)
+            return np.asarray(positions), valid
 
         def gated_metric(tracks, dets, track_indices, detection_indices):
             features = np.array([dets[i].feature for i in detection_indices])
             targets = np.array([tracks[i].track_id for i in track_indices])
-            appearance_cost = self.metric.distance(features, targets)
+            appearance_cost = self.metric.distance(features, targets)  # ∈ [0, 1]
 
-            measurements = np.asarray([dets[i].to_xyah() for i in detection_indices])
-
-            # Gate using chi2 threshold instead of relative normalization
-            gate_threshold = behavioral_ekf.chi2inv95[4]  # 4D measurement space
-
-            motion_cost = np.full_like(appearance_cost, 1e5)  # default: large cost
+            # Normalised Mahalanobis: divide by gate_threshold → ∈ [0, 1] inside
+            # gate, 1e5 outside.  No-depth detections get motion_cost=0 so
+            # appearance is the sole criterion for those columns.
+            world_pos_arr, valid = _world_positions(detection_indices)
+            motion_cost = np.zeros_like(appearance_cost)
             for row, track_idx in enumerate(track_indices):
-                track = tracks[track_idx]
                 gating_dist = self.kf.gating_distance(
-                    track.mean, track.covariance, measurements, only_position=False
-                )
-                # Only allow matches within the chi2 gate
-                motion_cost[row, gating_dist > gate_threshold] = 1e5
-                motion_cost[row, gating_dist <= gate_threshold] = gating_dist[gating_dist <= gate_threshold]
+                    tracks[track_idx].mean, tracks[track_idx].covariance,
+                    world_pos_arr)
+                for col, (dist, is_valid) in enumerate(zip(gating_dist, valid)):
+                    if is_valid:
+                        motion_cost[row, col] = (
+                            dist / gate_threshold if dist <= gate_threshold
+                            else 1e5)
+                    # else: no depth → leave 0, appearance decides
 
-            lambda_ = 0.5
-            cost_matrix = lambda_ * appearance_cost + (1 - lambda_) * motion_cost
+            return self.lambda_ * appearance_cost + (1 - self.lambda_) * motion_cost
+
+        def fallback_3d_metric(tracks, _dets, track_indices, detection_indices):
+            """Euclidean distance between last observed world positions — no filter."""
+            cost_matrix = np.full((len(track_indices), len(detection_indices)), 1e5)
+            for row, track_idx in enumerate(track_indices):
+                last_wp = tracks[track_idx]._last_world_pos
+                if last_wp is None:
+                    continue
+                for col, det_idx in enumerate(detection_indices):
+                    wp = detections[det_idx].world_pos
+                    if wp is None:
+                        continue
+                    dist = float(np.linalg.norm(last_wp - wp))
+                    if dist <= self.fallback_3d_threshold:
+                        cost_matrix[row, col] = dist
             return cost_matrix
 
-        # Split track set into confirmed and unconfirmed tracks.
         confirmed_tracks = [
             i for i, t in enumerate(self.tracks) if t.is_confirmed()]
         unconfirmed_tracks = [
             i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
 
-        # Associate confirmed tracks using appearance features.
+        # Stage 1: confirmed tracks — appearance + 3-D Mahalanobis gate.
         matches_a, unmatched_tracks_a, unmatched_detections = \
             linear_assignment.matching_cascade(
                 gated_metric, self.metric.matching_threshold, self.max_age,
                 self.tracks, detections, confirmed_tracks)
 
-        # Associate remaining tracks together with unconfirmed tracks using IOU.
-        iou_track_candidates = unconfirmed_tracks + [
-            k for k in unmatched_tracks_a if
-            self.tracks[k].time_since_update == 1]
+        # Stage 2: unconfirmed + recently-missed tracks — fallback matching.
+        fallback_candidates = unconfirmed_tracks + [
+            k for k in unmatched_tracks_a if self.tracks[k].time_since_update == 1]
         unmatched_tracks_a = [
-            k for k in unmatched_tracks_a if
-            self.tracks[k].time_since_update != 1]
+            k for k in unmatched_tracks_a if self.tracks[k].time_since_update != 1]
+
+        if self.fallback_mode == "iou":
+            fallback_metric = iou_matching.iou_cost
+            fallback_threshold = self.max_iou_distance
+        else:  # "3d"
+            fallback_metric = fallback_3d_metric
+            fallback_threshold = self.fallback_3d_threshold
+
         matches_b, unmatched_tracks_b, unmatched_detections = \
             linear_assignment.min_cost_matching(
-                iou_matching.iou_cost, self.max_iou_distance, self.tracks,
-                detections, iou_track_candidates, unmatched_detections)
+                fallback_metric, fallback_threshold, self.tracks,
+                detections, fallback_candidates, unmatched_detections)
 
         matches = matches_a + matches_b
+        # print("LEN MATCHES A AND B , ", len(matches_a), len(matches_b))
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
         return matches, unmatched_tracks, unmatched_detections
 
     def _initiate_track(self, detection):
-        mean, covariance = self.kf.initiate(detection.to_xyah(), world_pos=detection.world_pos)
+        if detection.world_pos is not None:
+            mean, covariance = self.kf.initiate(detection.world_pos)
+        else:
+            # No depth this frame — create a placeholder filter state with huge
+            # uncertainty.  The track will match via appearance/IOU until depth
+            # returns, at which point the filter will be corrected on update.
+            mean, covariance = self.kf.initiate_no_depth()
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age,
-            detection.feature))
+            detection.feature, tlwh=detection.tlwh,
+            world_pos=detection.world_pos))
         self._next_id += 1

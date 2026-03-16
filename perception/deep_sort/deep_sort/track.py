@@ -18,53 +18,12 @@ class TrackState:
 
 class Track:
     """
-    A single target track with state space `(x, y, a, h)` and associated
-    velocities, where `(x, y)` is the center of the bounding box, `a` is the
-    aspect ratio and `h` is the height.
-
-    Parameters
-    ----------
-    mean : ndarray
-        Mean vector of the initial state distribution.
-    covariance : ndarray
-        Covariance matrix of the initial state distribution.
-    track_id : int
-        A unique track identifier.
-    n_init : int
-        Number of consecutive detections before the track is confirmed. The
-        track state is set to `Deleted` if a miss occurs within the first
-        `n_init` frames.
-    max_age : int
-        The maximum number of consecutive misses before the track state is
-        set to `Deleted`.
-    feature : Optional[ndarray]
-        Feature vector of the detection this track originates from. If not None,
-        this feature is added to the `features` cache.
-
-    Attributes
-    ----------
-    mean : ndarray
-        Mean vector of the initial state distribution.
-    covariance : ndarray
-        Covariance matrix of the initial state distribution.
-    track_id : int
-        A unique track identifier.
-    hits : int
-        Total number of measurement updates.
-    age : int
-        Total number of frames since first occurance.
-    time_since_update : int
-        Total number of frames since last measurement update.
-    state : TrackState
-        The current track state.
-    features : List[ndarray]
-        A cache of features. On each measurement update, the associated feature
-        vector is added to this list.
-
+    A single target track with 24-D IMM state (3×7-D sub-models + 3 mode probs).
+    State is maintained in 3-D world-frame coordinates [pX, pZ, pY] (metres).
     """
 
     def __init__(self, mean, covariance, track_id, n_init, max_age,
-                 feature=None):
+                 feature=None, tlwh=None, world_pos=None):
         self.mean = mean
         self.covariance = covariance
         self.track_id = track_id
@@ -79,35 +38,12 @@ class Track:
 
         self._n_init = n_init
         self._max_age = max_age
-
-    def to_tlwh(self):
-        """Get current position in bounding box format `(top left x, top left y,
-        width, height)`.
-
-        Returns
-        -------
-        ndarray
-            The bounding box.
-
-        """
-        ret = self.mean[:4].copy()
-        ret[2] *= ret[3]
-        ret[:2] -= ret[2:] / 2
-        return ret
-
-    def to_tlbr(self):
-        """Get current position in bounding box format `(min x, miny, max x,
-        max y)`.
-
-        Returns
-        -------
-        ndarray
-            The bounding box.
-
-        """
-        ret = self.to_tlwh()
-        ret[2:] = ret[:2] + ret[2:]
-        return ret
+        # Last observed bounding box — used for visualization only.
+        # The filter state is 3-D world-frame; bboxes come from detections.
+        self._last_tlwh = tlwh.copy() if tlwh is not None else None
+        # Last observed 3-D world position — used for direct-3D fallback matching.
+        import numpy as np
+        self._last_world_pos = np.asarray(world_pos, dtype=np.float64) if world_pos is not None else None
 
     def predict(self, kf, other_track_means=None):
         """Propagate the state distribution to the current time step using the
@@ -129,10 +65,12 @@ class Track:
         self.age += 1
         self.time_since_update += 1
         # Inflate uncertainty during occlusion — capped to prevent numerical blowup.
-        # 1.5^N diverges rapidly (1.5^20 ≈ 3325x); cap keeps covariance finite.
+        # Only inflate the 21×21 model-state block; mode-probability entries
+        # ([21:24]) are mixing weights, not variances — scaling them is wrong.
         if self.time_since_update > 1:
             inflation = min(1.5 ** (self.time_since_update - 1), 4.0)
-            self.covariance *= inflation
+            n = min(21, self.covariance.shape[0])
+            self.covariance[:n, :n] *= inflation
 
     def update(self, kf, detection):
         """Perform Kalman filter measurement update step and update the feature
@@ -146,15 +84,35 @@ class Track:
             The associated detection.
 
         """
-        self.mean, self.covariance = kf.update(
-            self.mean, self.covariance, detection.to_xyah(),
-            world_pos=detection.world_pos)
+        import numpy as np
+        if detection.world_pos is not None:
+            self.mean, self.covariance = kf.update(
+                self.mean, self.covariance, detection.world_pos)
+            self._last_world_pos = np.asarray(detection.world_pos, dtype=np.float64)
+        # If no depth this frame, skip filter update — appearance still matches
+        # and the filter coasts on its prediction until depth returns.
+        self._last_tlwh = detection.tlwh.copy()
         self.features.append(detection.feature)
 
         self.hits += 1
         self.time_since_update = 0
         if self.state == TrackState.Tentative and self.hits >= self._n_init:
             self.state = TrackState.Confirmed
+
+    def to_tlwh(self):
+        """Return last observed bounding box as (top-left x, top-left y, w, h).
+        Returns zeros if the track has never been associated with a detection.
+        """
+        import numpy as np
+        if self._last_tlwh is None:
+            return np.zeros(4)
+        return self._last_tlwh.copy()
+
+    def to_tlbr(self):
+        """Return last observed bounding box as (x1, y1, x2, y2)."""
+        ret = self.to_tlwh()
+        ret[2:] += ret[:2]
+        return ret
 
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step).

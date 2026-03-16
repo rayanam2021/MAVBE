@@ -416,8 +416,8 @@ def main():
     parser.add_argument('--port',   type=int,   default=2000)
     parser.add_argument('--output', default='crosswalk_occlusion_with_depth_v1.mp4')
     parser.add_argument('--fps',    type=float, default=20.0)
-    parser.add_argument('--width',  type=int,   default=1920)
-    parser.add_argument('--height', type=int,   default=1080)
+    parser.add_argument('--width',  type=int,   default=800)
+    parser.add_argument('--height', type=int,   default=600)
     parser.add_argument('--map',    default='Town10HD',
                         help='CARLA map (leave blank to use current)')
     parser.add_argument('--filter', default='vehicle.tesla.model3',

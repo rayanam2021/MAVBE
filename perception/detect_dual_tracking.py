@@ -52,8 +52,9 @@ import torchvision.transforms as T   # <-- Add this import here
 import torchreid
 
 
-# Global buffer for trails
+# Global buffer for trails (last 64 points) and full trajectories (all points for plot)
 data_deque = {}
+full_trajectories = {}
 
 # Class names (COCO)
 def classNames():
@@ -86,20 +87,63 @@ def colorLabels(classid):
 
 import matplotlib.pyplot as plt
 
-def save_trajectories(data_deque, save_path='trajectories.png'):
-    plt.figure(figsize=(12,8))
-    for track_id, points in data_deque.items():
+
+def load_gt_trajectories(gt_path):
+    """
+    Load MOT-format GT file (frame,id,left,top,width,height) and return
+    gt_trajectories[id] = [(cx, cy), ...] in frame order (center of bbox).
+    """
+    gt_trajectories = {}
+    path = Path(gt_path)
+    if not path.exists():
+        return None
+    with open(path) as f:
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) < 6:
+                continue
+            frame_idx = int(parts[0])
+            tid = int(parts[1])
+            left, top, w, h = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
+            cx = left + w / 2.0
+            cy = top + h / 2.0
+            if tid not in gt_trajectories:
+                gt_trajectories[tid] = []
+            gt_trajectories[tid].append((frame_idx, cx, cy))
+    for tid in gt_trajectories:
+        gt_trajectories[tid].sort(key=lambda x: x[0])
+        gt_trajectories[tid] = [(x, y) for _, x, y in gt_trajectories[tid]]
+    return gt_trajectories
+
+
+def save_trajectories(full_trajectories, save_path='trajectories.png', gt_trajectories=None, width=1280, height=720):
+    plt.figure(figsize=(12, 8))
+    for track_id, points in full_trajectories.items():
         if len(points) == 0:
             continue
         points = np.array(points)
-        plt.plot(points[:,0], points[:,1], marker='o', label=f'ID {track_id}')
-    plt.gca().invert_yaxis()  # Origin (0,0) is top-left like in images
+        plt.plot(points[:, 0], points[:, 1], marker='o', markersize=2, label='Pred ID %d' % track_id)
+    if gt_trajectories:
+        for gt_id, points in gt_trajectories.items():
+            if len(points) == 0:
+                continue
+            points = np.array(points)
+            plt.plot(
+                points[:, 0], points[:, 1],
+                linestyle='--', marker='s', markersize=2, alpha=0.8,
+                label='GT ID %d' % gt_id,
+            )
+    ax = plt.gca()
+    ax.invert_yaxis()
+    ax.set_xlim(0, width)
+    ax.set_ylim(height, 0)
     plt.xlabel('X pixels')
     plt.ylabel('Y pixels')
-    plt.title('Object Trajectories')
-    plt.legend()
+    plt.title('Object Trajectories (predicted and ground truth)')
+    plt.legend(loc='best', fontsize=8)
+    plt.tight_layout()
     plt.savefig(save_path)
-    print(f"[INFO] Trajectory plot saved to {save_path}")
+    print("[INFO] Trajectory plot saved to %s" % save_path)
     plt.close()
 
 def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, offset=(0,0)):
@@ -119,6 +163,9 @@ def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, 
         if id not in data_deque:
             data_deque[id] = deque(maxlen=64)
         data_deque[id].appendleft(center)
+        if id not in full_trajectories:
+            full_trajectories[id] = []
+        full_trajectories[id].append(center)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{id}:{className[cat]}"
@@ -137,11 +184,11 @@ def draw_boxes(frame, bbox_xyxy, draw_trails, identities=None, categories=None, 
     return frame
 
 @smart_inference_mode()
-def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/images', data=ROOT / 'data/coco.yaml',
+def run(weights=ROOT / 'yolo.pt', save_plot_name="yash", source=ROOT / 'data/images', data=ROOT / 'data/coco.yaml',
         imgsz=(640,640), conf_thres=0.75, iou_thres=0.85, max_det=1000,
         device='', view_img=False, nosave=False, draw_trails=False,
         project=ROOT / 'runs/detect', name='exp', exist_ok=False,
-        half=False, dnn=False, vid_stride=1):
+        half=False, dnn=False, vid_stride=1, gt=''):
 
     source = str(source)
     save_img = not nosave
@@ -153,6 +200,8 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
     # Directories
     save_dir = increment_path(Path(project)/name, exist_ok=exist_ok)
     save_dir.mkdir(parents=True, exist_ok=True)
+    full_trajectories.clear()
+    plot_width, plot_height = 1280, 720
 
     # ---------------- VIDEO WRITER SETUP ----------------
     save_video_path = ROOT/f'runs/detect/trajectories_{save_plot_name}.mp4'
@@ -235,9 +284,7 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
             else:
                 p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
             ims = im0.copy()
-
-
-
+            plot_height, plot_width = ims.shape[:2]
 
             # Initialize video writer once (for first frame)
             if vid_writer is None:
@@ -346,12 +393,24 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         vid_writer.release()
         print(f"[INFO] Video saved to {save_video_path}")
 
-    save_trajectories(data_deque, save_path=ROOT/f'runs/detect/trajectories_{save_plot_name}.png')
+    gt_trajectories = None
+    if gt:
+        gt_trajectories = load_gt_trajectories(gt)
+        if gt_trajectories:
+            print("[INFO] Loaded GT trajectories for %d IDs" % len(gt_trajectories))
+    save_trajectories(
+        full_trajectories,
+        save_path=ROOT / ('runs/detect/trajectories_%s.png' % save_plot_name),
+        gt_trajectories=gt_trajectories,
+        width=plot_width,
+        height=plot_height,
+    )
 
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov9/weights/yolov9-c.pt', help='model path')
     parser.add_argument('--save_plot_name', type=str, required=True)
+    parser.add_argument('--gt', type=str, default='', help='Optional: MOT-format GT file to plot ground-truth trajectories with predictions')
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/webcam')
     parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])

@@ -173,17 +173,20 @@ class KalmanFilter(object):
         """
         projected_mean, projected_cov = self.project(mean, covariance)
 
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False)
-        kalman_gain = scipy.linalg.cho_solve(
-            (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
-            check_finite=False).T
-        innovation = measurement - projected_mean
+        try:
+            chol_factor, lower = scipy.linalg.cho_factor(
+                projected_cov, lower=True, check_finite=False)
+            kalman_gain = scipy.linalg.cho_solve(
+                (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
+                check_finite=False).T
+            innovation = measurement - projected_mean
 
-        new_mean = mean + np.dot(innovation, kalman_gain.T)
-        new_covariance = covariance - np.linalg.multi_dot((
-            kalman_gain, projected_cov, kalman_gain.T))
-        return new_mean, new_covariance
+            new_mean = mean + np.dot(innovation, kalman_gain.T)
+            new_covariance = covariance - np.linalg.multi_dot((
+                kalman_gain, projected_cov, kalman_gain.T))
+            return new_mean, new_covariance
+        except np.linalg.LinAlgError:
+            return self.initiate(measurement)
 
     def gating_distance(self, mean, covariance, measurements,
                         only_position=False):
@@ -220,10 +223,14 @@ class KalmanFilter(object):
             mean, covariance = mean[:2], covariance[:2, :2]
             measurements = measurements[:, :2]
 
-        cholesky_factor = np.linalg.cholesky(covariance)
-        d = measurements - mean
-        z = scipy.linalg.solve_triangular(
-            cholesky_factor, d.T, lower=True, check_finite=False,
-            overwrite_b=True)
-        squared_maha = np.sum(z * z, axis=0)
-        return squared_maha
+        n = measurements.shape[0]
+        try:
+            cholesky_factor = np.linalg.cholesky(covariance)
+            d = measurements - mean
+            z = scipy.linalg.solve_triangular(
+                cholesky_factor, d.T, lower=True, check_finite=False,
+                overwrite_b=True)
+            squared_maha = np.sum(z * z, axis=0)
+            return squared_maha
+        except np.linalg.LinAlgError:
+            return np.full(n, 1e10)

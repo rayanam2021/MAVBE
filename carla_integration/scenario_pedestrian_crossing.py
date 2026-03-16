@@ -12,25 +12,7 @@ import argparse
 import os
 import random
 import sys
-import glob
 import time
-from pathlib import Path
-
-# ==============================================================================
-# -- Find CARLA module ---------------------------------------------------------
-# ==============================================================================
-# Look in the user's specific CARLA installation path
-carla_root = os.path.expanduser("~/autonomy_projects/CARLA_0.9.16")
-try:
-    sys.path.append(glob.glob(os.path.join(carla_root, 'PythonAPI/carla/dist/carla-*%d.%d-%s.egg' % (
-        sys.version_info.major,
-        sys.version_info.minor,
-        'win-amd64' if os.name == 'nt' else 'linux-x86_64')))[0])
-except IndexError:
-    pass
-
-# Also add the agents directory for navigation tools
-sys.path.append(os.path.join(carla_root, 'PythonAPI/carla'))
 
 import cv2
 import numpy as np
@@ -38,9 +20,7 @@ import numpy as np
 try:
     import carla
 except ImportError:
-    print("CARLA module not found.")
-    print(f"Looked in: {carla_root}")
-    print("Please ensure your 'carla_env' is active or PYTHONPATH is set correctly.")
+    print("CARLA module not found. Add CARLA PythonAPI to PYTHONPATH or place it in MAVBE/carla/")
     sys.exit(1)
 
 class PedestrianScenario:

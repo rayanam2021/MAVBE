@@ -103,25 +103,33 @@ def save_trajectories(data_deque, save_path='trajectories.png'):
     print(f"[INFO] Trajectory plot saved to {save_path}")
     plt.close()
 
-def load_depth_image(depth_path, depth_format='carla_rgb'):
-    """Load a depth image and return a float32 array of depth values in metres.
+# def load_depth_image(depth_path, depth_format='carla_rgb'):
+#     """Load a depth image and return a float32 array of depth values in metres.
 
-    Supported formats:
-      'carla_rgb'  - CARLA packed-RGB depth: depth_m = (R + G*256 + B*65536) / (256^3-1) * 1000
-      'uint16_mm'  - 16-bit PNG with values in millimetres: depth_m = pixel / 1000.0
-    """
+#     Supported formats:
+#       'carla_rgb'  - CARLA packed-RGB depth: depth_m = (R + G*256 + B*65536) / (256^3-1) * 1000
+#       'uint16_mm'  - 16-bit PNG with values in millimetres: depth_m = pixel / 1000.0
+#     """
+#     img = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+#     if img is None:
+#         return None
+#     if depth_format == 'carla_rgb':
+#         img = img.astype(np.float64)
+#         # OpenCV loads as BGR; CARLA stores R in channel 2, G in channel 1, B in channel 0
+#         depth_m = (img[:, :, 2] + img[:, :, 1] * 256.0 + img[:, :, 0] * 65536.0) / (256.0**3 - 1) * 1000.0
+#     elif depth_format == 'uint16_mm':
+#         depth_m = img.astype(np.float64) / 1000.0
+#     else:
+#         raise ValueError(f"Unknown depth_format: {depth_format}. Use 'carla_rgb' or 'uint16_mm'.")
+#     return depth_m.astype(np.float32)
+
+def load_depth_image(depth_path, depth_format, max_depth=50.0):
     img = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
-    if depth_format == 'carla_rgb':
-        img = img.astype(np.float64)
-        # OpenCV loads as BGR; CARLA stores R in channel 2, G in channel 1, B in channel 0
-        depth_m = (img[:, :, 2] + img[:, :, 1] * 256.0 + img[:, :, 0] * 65536.0) / (256.0**3 - 1) * 1000.0
-    elif depth_format == 'uint16_mm':
-        depth_m = img.astype(np.float64) / 1000.0
-    else:
-        raise ValueError(f"Unknown depth_format: {depth_format}. Use 'carla_rgb' or 'uint16_mm'.")
-    return depth_m.astype(np.float32)
+
+    depth_m = img.astype(np.float32) / 65535.0 * max_depth
+    return depth_m
 
 
 def unproject_pixel(u, v, depth_m, fx, fy, cx, cy):
@@ -252,8 +260,15 @@ def run(weights=ROOT / 'yolo.pt', save_plot_name = "yash", source=ROOT / 'data/i
         matching_threshold=0.5,  # this was max_cosine_distance
         budget=100               # this was nn_budget
     )
-    tracker = Tracker(metric, fx=fx, fy=fy, cx=cx_intr, cy=cy_intr,
-                      has_depth=(depth_dir is not None))
+    # tracker = Tracker(metric, fx=fx, fy=fy, cx=cx_intr, cy=cy_intr,
+    #                   has_depth=(depth_dir is not None))
+    # tracker = Tracker(metric)
+
+    # Direct 3D Euclidean fallback (default, no filter involved):
+    tracker = Tracker(metric, fallback_mode="3d", fallback_3d_threshold=0.5)
+
+    # IOU bbox fallback:
+    # tracker = Tracker(metric, fallback_mode="iou", max_iou_distance=0.7)
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))
@@ -424,7 +439,7 @@ def parse_opt():
     parser.add_argument('--data', type=str, default=ROOT / 'yolov9/data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640])
     parser.add_argument('--conf-thres', type=float, default=0.75)
-    parser.add_argument('--iou-thres', type=float, default=0.65)
+    parser.add_argument('--iou-thres', type=float, default=0.15)
     parser.add_argument('--max-det', type=int, default=1000)
     parser.add_argument('--device', default='')
     parser.add_argument('--view-img', action='store_true')
@@ -445,8 +460,8 @@ def parse_opt():
                         help='Depth image encoding: carla_rgb (CARLA packed RGB) or uint16_mm (16-bit mm).')
     parser.add_argument('--fx', type=float, default=400.0, help='Camera focal length x (pixels)')
     parser.add_argument('--fy', type=float, default=400.0, help='Camera focal length y (pixels)')
-    parser.add_argument('--cx_intr', type=float, default=400.0, help='Camera principal point x (pixels)')
-    parser.add_argument('--cy_intr', type=float, default=300.0, help='Camera principal point y (pixels)')
+    parser.add_argument('--cx_intr', type=float, default=960.0, help='Camera principal point x (pixels)')
+    parser.add_argument('--cy_intr', type=float, default=540.0, help='Camera principal point y (pixels)')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1
     print_args(vars(opt))

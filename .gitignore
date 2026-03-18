@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.pb
+
+# Videos (generated output — record fresh via the pipeline)
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Experiment results (regenerable via run_experiments.py)
+experiment_pipeline/results/
+
+# Perception run outputs
+perception/runs/
+
+# Depth frames (large, regenerable)
+depth_frames/
+
+# Logs
+*.log
+runs/
+
+# Jupyter
+.ipynb_checkpoints/

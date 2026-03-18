@@ -1,105 +1,230 @@
-# MAVBE
-Multi-Agent Vehicle and Behavior Estimator (MAVBE)
+# MAVBE — Multi-Agent Vehicle Behavior Estimator
+
+A behavior-aware multi-pedestrian tracking system evaluated in CARLA simulation. Compares a **Behavioral IMM filter** (Interacting Multiple Model with social force augmentation) against a **Vanilla Kalman Filter** baseline across varying pedestrian densities and appearance-motion cost weightings.
+
+<p align="center">
+  <img src="assets/tracking_demo.png" width="700" alt="YOLOv9 + DeepSORT tracking 5 pedestrians in CARLA Town10HD" />
+</p>
 
 ---
 
-## Which files to run
+## Pipeline
 
-### Detection + tracking (video / webcam / images)
+<p align="center">
+  <img src="assets/pipeline.png" width="600" alt="System pipeline diagram" />
+</p>
 
-| What you want | File to run | Where to run from | Notes |
-|---------------|-------------|-------------------|--------|
-| **YOLO + Deep SORT** on a video, folder, or webcam | `detect_dual_tracking.py` | Repo root `MAVBE/` | Uses `deep_sort_pytorch` and YOLO (`models/`, `utils/`). Ensure `perception/yolov9` (or your YOLO root) is on `PYTHONPATH`, or run from `perception/yolov9` with `python ../../detect_dual_tracking.py --source <video_or_folder>`. |
+| Stage | Description |
+|-------|-------------|
+| **RGB + Depth capture** | Forward-facing 800x600 camera in CARLA (90° FOV, 20 Hz) |
+| **YOLOv9 detection** | Person-class bounding boxes with configurable confidence threshold |
+| **OSNet Re-ID** | Appearance feature extraction for each detection |
+| **3-D back-projection** | Depth lookup + pixel unprojection to camera-frame coordinates |
+| **Data association** | DeepSORT cascade matching with λ-weighted appearance + motion cost |
+| **State estimation** | Behavioral IMM (CV/CT/CA + social force) *or* Vanilla KF baseline |
+| **Output** | Per-track 3-D positions `[pX, pZ, pY]` + covariance |
 
-**Example (from repo root):**
+---
+
+## Repository Structure
+
+```
+MAVBE/
+├── experiment_pipeline/          # End-to-end experiment orchestration
+│   ├── config.py                 #   All tuneable parameters
+│   ├── carla_scenario.py         #   CARLA recording: spawn ego + peds, capture video/depth/GT
+│   ├── run_tracking.py           #   YOLO + DeepSORT tracking with IMM or KF
+│   ├── evaluate.py               #   Hungarian track-to-GT matching, RMSE, IDSW, trajectory plots
+│   ├── plot_summary.py           #   Aggregate RMSE & IDSW vs. #pedestrians plots
+│   └── run_experiments.py        #   Main entry point — runs all four phases
+├── perception/
+│   ├── deep_sort/                #   DeepSORT tracker (Behavioral IMM + Vanilla KF variants)
+│   ├── yolov9/                   #   YOLOv9 detection model
+│   ├── detect_dual_tracking.py   #   Standalone YOLO+DeepSORT (IMM) on any video
+│   └── detect_dual_tracking_kf.py#   Standalone YOLO+DeepSORT (Vanilla KF) on any video
+├── carla_integration/            # CARLA scenario scripts (pedestrian crossing, multi-ped, etc.)
+├── evaluation/                   # MOT-style metrics (MOTA, MOTP, IDF1)
+├── configs/                      # YAML configs for DeepSORT
+├── report/                       # LaTeX scientific paper (main.tex + references.bib)
+├── assets/                       # Images for README
+├── .gitignore
+└── requirements.txt
+```
+
+> **Note:** Model weights (`.pt`), videos (`.mp4`), and experiment results are excluded from version control via `.gitignore`. Run the pipeline to regenerate them.
+
+---
+
+## Setup
+
+### Prerequisites
+
+- **CARLA 0.9.15+** running on `localhost:2000`
+- **Python 3.8+**
+- **CUDA-capable GPU** (recommended)
+
+### Install
+
 ```bash
-# From MAVBE/ (adjust path to yolo weights and source as needed)
-# python detect_dual_tracking.py --source path/to/video.mp4 --weights perception/yolov9/yolov9-c.pt
-python detect_dual_tracking.py --source abs_path --save_plot_name plot_name
+git clone https://github.com/<your-org>/MAVBE.git
+cd MAVBE
+pip install -r requirements.txt
+```
+
+YOLOv9 weights (`yolov9-c.pt`) are auto-downloaded on first run, or place them manually in the repo root.
+
+---
+
+## Quick Start
+
+### 1. Run the full experiment pipeline
+
+Start CARLA, then:
+
+```bash
+cd experiment_pipeline
+python run_experiments.py --trials 5 --device cuda:0 --save_video
+```
+
+This executes four phases in sequence:
+
+| Phase | What happens | CARLA needed? |
+|-------|-------------|:-------------:|
+| **1 — Record** | Spawns ego + pedestrians, captures RGB video, depth frames, and ground truth | Yes |
+| **2 — Track** | Runs YOLOv9 + DeepSORT with each filter/λ configuration | No |
+| **3 — Evaluate** | Computes RMSE, IDSW, and trajectory plots per method | No |
+| **4 — Summarize** | Generates aggregate RMSE & IDSW vs. #pedestrians plots | No |
+
+CARLA can be shut down after Phase 1 completes.
+
+### 2. Record CARLA videos only (no tracking)
+
+```bash
+python run_experiments.py --trials 5 --only_carla
+```
+
+### 3. Rerun tracking on existing recordings
+
+```bash
+python run_experiments.py --skip_carla --results_dir results/run_20260316_070259 --device cuda:0
+```
+
+### 4. Regenerate plots from existing metrics
+
+```bash
+python run_experiments.py --only_plots --results_dir results/run_20260316_070259
+```
+
+### 5. Test a single 5-pedestrian scenario
+
+```bash
+cd experiment_pipeline
+python carla_scenario.py --n_peds 5 --output_dir test_run
+python run_tracking.py --source test_run/video.mp4 --depth_dir test_run/depth_frames --filter imm --lambda_ 0.5 --output_dir test_run/imm_l05 --save_video
+python evaluate.py --gt test_run/gt_world.csv --pred test_run/imm_l05/tracks_world.csv --output_dir test_run/imm_l05
 ```
 
 ---
 
-### Deep SORT with Behavioral EKF (MOTChallenge-style sequences)
+## Standalone Scripts
 
-The in-repo tracker uses a **Behavioral EKF** (CT + social force) and runs on precomputed detections in MOTChallenge layout.
+These can be used independently of the experiment pipeline:
 
-| What you want | File to run | Where to run from | Notes |
-|---------------|-------------|-------------------|--------|
-| **Run tracker** on one sequence (with display) | `perception/deep_sort/deep_sort_app.py` | `perception/deep_sort/` | Needs a sequence dir (e.g. `img1/`, `seqinfo.ini`) and a detection `.npy` file. |
-| **Evaluate** on a full MOT dataset | `perception/deep_sort/evaluate_motchallenge.py` | `perception/deep_sort/` | Runs the tracker on every sequence under `--mot_dir` and writes results to `--output_dir`. |
-| **Generate detections** (MOT format + features) | `perception/deep_sort/tools/generate_detections.py` | `perception/deep_sort/` | Produces `.npy` detections for use with `deep_sort_app.py`. Needs a frozen model (e.g. `mars-small128.pb`) and `--mot_dir`. |
-| **Visualize** tracking results | `perception/deep_sort/show_results.py` | `perception/deep_sort/` | Sequence dir + result file in MOT format. |
-| **Generate videos** from results | `perception/deep_sort/generate_videos.py` | `perception/deep_sort/` | Batch video generation from MOT-style outputs. |
+| Script | Description |
+|--------|-------------|
+| `perception/detect_dual_tracking.py` | Run YOLOv9 + DeepSORT (Behavioral IMM) on any video file |
+| `perception/detect_dual_tracking_kf.py` | Same as above but with Vanilla KF |
+| `carla_integration/scenario_pedestrian_crossing.py` | Single-pedestrian crossing scenario in CARLA |
+| `carla_integration/scenario_pedestrian_crossing_multi.py` | Multi-pedestrian scenario with filter-based braking |
+| `carla_integration/spawn_pedestrian_video.py` | Spawn vehicle + pedestrian every 10s, record 60s video |
+| `carla_integration/spawn_pred_crossing_with_Depth.py` | Pedestrian crossing with RGB-D capture |
 
-**Examples (from `perception/deep_sort/`):**
-```bash
-# Single sequence (behavioral EKF tracker)
-python deep_sort_app.py --sequence_dir=./MOT16/train/MOT16-02 --detection_file=./resources/detections/MOT16-02.npy --min_confidence=0.3 --display=True
+---
 
-# Evaluate all sequences in a MOT directory
-python evaluate_motchallenge.py --mot_dir=./MOT16/train --detection_dir=./resources/detections --output_dir=./results
+## Method Configurations
+
+The experiment sweeps over **5 methods** × **1–5 pedestrians** × *N* trials:
+
+| ID | Method | Filter | λ | Description |
+|----|--------|--------|---|-------------|
+| M1 | `imm_l0` | Behavioral IMM | 0.0 | Motion-only association, behavior-aware state estimation |
+| M2 | `imm_l05` | Behavioral IMM | 0.5 | Balanced appearance + motion cost with IMM |
+| M3 | `kf_l0` | Vanilla KF | 0.0 | Motion-only association, constant-velocity baseline |
+| M4 | `kf_l05` | Vanilla KF | 0.5 | Balanced appearance + motion cost with KF |
+| M5 | `kf_l1` | Vanilla KF | 1.0 | Pure appearance association, KF state propagation |
+
+The λ parameter controls the cost blend in DeepSORT: `cost = λ · d_appearance + (1 − λ) · d_motion`.
+
+---
+
+## Configuration
+
+All parameters live in `experiment_pipeline/config.py`:
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `PED_COUNTS` | `[1, 2, 3, 4, 5]` | Pedestrian count sweep |
+| `N_TRIALS` | `1` | Trials per configuration (override with `--trials`) |
+| `SPAWN_MU` | `(6, 0, 0)` m | Mean spawn offset from ego (forward, lateral, vertical) |
+| `SPAWN_SIGMA` | `(1, 3, 0)` m | Spawn spread std-dev per axis |
+| `SIM_DURATION` | `5.0` s | Recording length per scenario |
+| `FPS` | `20` | Capture frame rate |
+| `CONF_THRESH` | `0.8` | YOLO detection confidence threshold |
+| `SOCIAL_FORCE_RADIUS` | `2.0` m | Pedestrian repulsion interaction distance |
+
+---
+
+## Outputs
+
+Each run produces a timestamped results directory:
+
+```
+results/run_20260316_070259/
+├── trial_0/
+│   ├── n1/                    # 1-pedestrian scenario
+│   │   ├── video.mp4          # Raw CARLA recording
+│   │   ├── depth_frames/      # 16-bit PNG depth maps
+│   │   ├── gt_world.csv       # Ground truth (camera-frame 3-D)
+│   │   ├── imm_l0/            # Method results
+│   │   │   ├── tracks_world.csv
+│   │   │   ├── metrics.json   # {total_rmse, id_switches, ...}
+│   │   │   ├── trajectories.png
+│   │   │   └── tracking_output.mp4  (if --save_video)
+│   │   ├── imm_l05/
+│   │   ├── kf_l0/
+│   │   ├── kf_l05/
+│   │   └── kf_l1/
+│   ├── n2/ ...
+│   └── n5/
+├── trial_1/ ...
+├── rmse_vs_npeds.png          # Summary plot
+└── idsw_vs_npeds.png          # Summary plot
 ```
 
-See `perception/deep_sort/README.md` for installation, detection generation, and MOT data layout.
+---
+
+## Evaluation Metrics
+
+- **RMSE** — Root-mean-square 3-D position error (metres) between predicted and ground-truth tracks, matched via the Hungarian algorithm on pairwise RMSE cost
+- **IDSW** — Identity switches: excess tracks beyond GT count + per-frame reassignments where the nearest predicted track changes identity
 
 ---
 
-### YOLOv9 (detection / training)
+## CLI Reference
 
-| What you want | File to run | Where to run from |
-|---------------|-------------|--------------------|
-| **Inference** (detect only) | `perception/yolov9/detect.py` | `perception/yolov9/` |
-| **Train** detection model | `perception/yolov9/train.py` | `perception/yolov9/` |
-| **Validate** | `perception/yolov9/val.py` | `perception/yolov9/` |
+```
+python run_experiments.py [OPTIONS]
 
-Run from `perception/yolov9/`; see `perception/yolov9/README.md` for data and options.
-
----
-
-### CARLA integration
-
-| What you want | File to run | Where to run from | Notes |
-|---------------|-------------|-------------------|--------|
-| **Record scenario + video + ground truth (image frame)** | `carla_integration/scenario_pedestrian_crossing.py` | Repo root or `carla_integration/` | Creates scenario, records camera video and a GT file in **camera/image coordinates** (MOT format). Use for the evaluation pipeline below. |
-| **Multi-ped scenario (3 peds, filter-based brake)** | `carla_integration/scenario_pedestrian_crossing_multi.py` | Repo root or `carla_integration/` | Three AI pedestrians (two on sides, one child crossing); car drives and brakes only when the filter predicts collision. Use `--no-filter` to use GT for brake logic if the perception stack is not available. |
-| **Spawn vehicle + pedestrian every 10s, save 60s video** | `carla_integration/spawn_pedestrian_video.py` | Repo root or `carla_integration/` | Requires CARLA server running and `numpy`, `opencv-python`. Saves `carla_pedestrian_60s.mp4` by default. |
-| **CARLA auto-control demo** (vehicle + sensors) | `carla_integration/trajectory_planning.py` | Repo root or `carla_integration/` | Requires CARLA server, Python API, and `agents.navigation` modules. |
-
----
-
-### Evaluation pipeline (filter performance vs ground truth)
-
-Ground truth is **always in the camera/image frame**: 3D positions from CARLA are projected into 2D using the camera intrinsics, so GT bboxes are in the same pixel space as the tracker output. Evaluation then compares distance from GT (RMSE, ADE, FDE) and ID switches.
-
-1. **Record scenario + video + GT (image frame)**  
-   Run the CARLA scenario script; it writes the video and a GT file in MOT format (image coordinates).
-   ```bash
-   python carla_integration/scenario_pedestrian_crossing.py --output my_scenario.mp4 --gt-out my_scenario_gt.txt
-   ```
-
-2. **Run detection + tracking on the video and save tracks**  
-   Run `detect_dual_tracking` on the recorded video and export tracker output in MOT format.
-   ```bash
-   python perception/detect_dual_tracking.py --source my_scenario.mp4 --save_plot_name my_run --save-tracks my_scenario_pred.txt
-   ```
-   (Run from repo root; ensure `perception` is on path.)
-
-3. **Run evaluation (distance from GT + ID switches)**  
-   Compare GT and predictions with the evaluation script.
-   ```bash
-   python evaluation/run_metrics.py --gt my_scenario_gt.txt --pred my_scenario_pred.txt --out report.txt
-   ```
-   Output: MOTA, MOTP, IDF1, **IDSW**, **RMSE**, ADE, FDE, etc. (distance metrics are in pixels).
-
-See `evaluation/README.md` for metric definitions and I/O details.
-
----
-
-### Summary
-
-- **Quick tracking on a video:** `detect_dual_tracking.py` (YOLO + Deep SORT; uses external `deep_sort_pytorch`).
-- **Behavioral EKF tracker on MOT data:** run `perception/deep_sort/deep_sort_app.py` or `evaluate_motchallenge.py` (in-repo `perception/deep_sort` with Behavioral EKF).
-- **Detection only / training:** use scripts under `perception/yolov9/`.
-- **CARLA driving demo:** `carla_integration/trajectory_planning.py`.
-- **CARLA pedestrian video (60s, one ped every 10s):** `carla_integration/spawn_pedestrian_video.py`.
+Options:
+  --results_dir DIR    Output directory (auto-timestamped by default)
+  --trials N           Number of trials per config (default: 1)
+  --skip_carla         Reuse existing CARLA recordings
+  --skip_tracking      Reuse existing tracking outputs
+  --only_carla         Stop after CARLA recording (Phase 1)
+  --only_plots         Only regenerate summary plots
+  --device DEVICE      Torch device, e.g. cuda:0 (default: cpu)
+  --weights PATH       Path to YOLO weights file
+  --save_video         Save annotated tracking video per method
+  --host HOST          CARLA server host (default: 127.0.0.1)
+  --port PORT          CARLA server port (default: 2000)
+```

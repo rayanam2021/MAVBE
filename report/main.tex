@@ -16,6 +16,7 @@
 \pgfplotsset{compat=1.18}
 \usepackage{bm}
 \usepackage{siunitx}
+\usepackage{subcaption} % in preamble
 
 \begin{document}
 
@@ -46,7 +47,7 @@ yashr@stanford.edu}
 %  ABSTRACT
 % ======================================================================
 \begin{abstract}
-Accurate state estimation of pedestrians is essential for safe autonomous driving in urban environments. Standard multi-object tracking pipelines typically rely on constant-velocity Kalman filters operating in image space, which fail to capture the non-linear, socially-influenced dynamics of pedestrian motion. We present a behavior-aware tracking framework that couples an Interacting Multiple Model (IMM) filter---blending Constant Velocity, Coordinated Turn, and Constant Deceleration models---with an exponential social force term injected directly into the filter prediction step. The filter operates entirely in three-dimensional world-frame coordinates obtained via RGB-D depth unprojection and is integrated into a DeepSORT data-association pipeline with a tuneable appearance-versus-motion cost parameter $\lambda$. We evaluate five tracker configurations against CARLA simulator ground truth across scenarios with one to five pedestrians over five randomized trials, measuring root-mean-square position error (RMSE) and identity switches (IDSW). Our results demonstrate that the behavior-aware IMM filter with balanced appearance--motion association ($\lambda{=}0.5$) achieves the lowest RMSE ($0.50\,\text{m}$ at 5~pedestrians) and fewest identity switches ($9.8$), reducing RMSE by $55\%$ and IDSW by $68\%$ compared to the motion-only vanilla Kalman filter baseline ($1.10\,\text{m}$, $30.2$ IDSW).
+Accurate state estimation of pedestrians is essential for safe autonomous driving in urban environments. Standard multi-object tracking pipelines typically rely on constant-velocity Kalman filters operating in image space, which fail to capture the non-linear, socially-influenced dynamics of pedestrian motion. We present a behavior-aware tracking framework that couples an Interacting Multiple Model (IMM) filter, blending Constant Velocity, Coordinated Turn, and Constant Acceleration models with an exponential social force term injected directly into the filter prediction step. The filter operates entirely in three-dimensional world-frame coordinates obtained via RGB-D depth unprojection and is integrated into a DeepSORT data-association pipeline with a tuneable appearance-versus-motion cost parameter $\lambda$. We evaluate five tracker configurations against CARLA simulator ground truth across scenarios with one to five pedestrians over five randomized trials, measuring root-mean-square error (RMSE) and identity switches (IDSW). Our results demonstrate that the behavior-aware IMM filter with balanced appearance--motion association ($\lambda{=}0.5$) achieves the lowest RMSE ($0.50\,\text{m}$ at 5~pedestrians) and fewest identity switches ($9.8$), reducing RMSE by $55\%$ and IDSW by $68\%$ compared to the motion-only vanilla Kalman filter baseline ($1.10\,\text{m}$, $30.2$ IDSW).
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -59,16 +60,24 @@ Multi-Object Tracking, State Estimation, Extended Kalman Filter, Interacting Mul
 \section{Introduction}
 \label{sec:intro}
 
-Reliable perception of dynamic agents is a cornerstone of safety for autonomous vehicles operating in dense urban environments. Navigating alongside pedestrians requires not only detecting objects but accurately estimating their kinematic states and anticipating future behavior. A tracking system that treats each pedestrian as an isolated, inertia-driven particle---as standard constant-velocity Kalman filters do---cannot model social interactions such as collision avoidance, yielding, or group formation, leading to poor trajectory prediction and elevated identity-switch rates under occlusion~\cite{lefevre2014survey}.
+Reliable perception of dynamic agents is a cornerstone of safety for autonomous vehicles operating in dense urban environments. Navigating alongside pedestrians requires not only detecting objects but accurately estimating their kinematic states and anticipating future behavior. A tracking system that treats each pedestrian as an isolated, inertia-driven particle such as standard constant-velocity Kalman filters cannot model social interactions such as collision avoidance, yielding, or group formation, leading to poor trajectory prediction and elevated identity-switch rates under occlusion~\cite{lefevre2014survey}.
 
 This paper addresses these shortcomings through three contributions:
 \begin{enumerate}
-    \item A \textbf{behavior-aware Interacting Multiple Model (IMM)} filter that blends three kinematic hypotheses---constant velocity, coordinated turn, and constant deceleration---with a social force prediction term, operating entirely in 3-D world-frame coordinates.
+    \item A \textbf{behavior-aware Interacting Multiple Model (IMM)} filter that blends three kinematic hypotheses: constant velocity, coordinated turn, and constant acceleration with a social force prediction term, operating in 3-D world-frame coordinates.
     \item A \textbf{configurable data-association framework} built on DeepSORT~\cite{wojke2017simple} that blends Mahalanobis-distance gating from the IMM with appearance features via a tuneable parameter~$\lambda$, enabling systematic comparison of motion-only, appearance-only, and hybrid association strategies.
-    \item A \textbf{controlled experiment pipeline} within the CARLA simulator~\cite{dosovitskiy2017carla} that sweeps pedestrian density from one to five agents across five tracker configurations, producing ground-truth-validated RMSE and IDSW metrics.
+    \item A \textbf{controlled experiment pipeline} within the CARLA simulator~\cite{dosovitskiy2017carla} as shown in Fig. \ref{fig:carla} that sweeps pedestrian density from one to five agents across five tracker configurations, producing ground-truth-validated RMSE and IDSW metrics. This is followed by validation of the stack on real world rollouts. 
+    
 \end{enumerate}
 
-The remainder of this paper is organized as follows. Section~\ref{sec:related} reviews related work on pedestrian tracking, behavior-aware filtering, and the IMM framework. Section~\ref{sec:method} details the system architecture, state-space formulation, dynamics models, social force augmentation, EKF measurement update, IMM mechanics, coordinate transformations, and data association. Section~\ref{sec:experiments} describes the CARLA experimental setup. Section~\ref{sec:results} presents quantitative and qualitative results. Section~\ref{sec:limitations} discusses limitations and future work, and Section~\ref{sec:conclusion} concludes.
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/carla_tracking.png}
+\caption{CARLA Pedestrian Tracking.}
+\label{fig:carla}
+\end{figure}
+
+The remainder of this paper is organized as follows. Section~\ref{sec:related} reviews related work on pedestrian tracking, behavior-aware filtering, and the IMM framework. Section~\ref{sec:method} details the system architecture, state-space formulation, dynamics models, social force augmentation, EKF measurement update, IMM mechanics, coordinate transformations, and data association. Section~\ref{sec:experiments} describes the CARLA experimental setup. Section~\ref{sec:results} presents quantitative and qualitative results and validation of the stack on real world video data. Section~\ref{sec:limitations} discusses limitations and future work, and Section~\ref{sec:conclusion} concludes.
 
 % ======================================================================
 %  2. RELATED WORK
@@ -83,7 +92,7 @@ Modern multi-object tracking (MOT) follows a tracking-by-detection paradigm. Cla
 Helbing and Moln\'{a}r's Social Force Model (SFM)~\cite{helbing1995social} represents pedestrians as particles governed by attractive goal forces and repulsive social forces from neighbors. While recent deep-learning methods such as Social LSTM~\cite{alahi2016social} and Trajectron++~\cite{salzmann2020trajectron} learn complex interaction patterns from data, the SFM remains attractive for filter-based pipelines because it provides an analytically differentiable control input that can be injected directly into the EKF prediction step without retraining.
 
 \subsection{Interacting Multiple Model Filters}
-The IMM algorithm~\cite{blom1988imm, blackman1999design} maintains a bank of Kalman (or extended Kalman) filters, each embodying a different motion hypothesis, and blends their outputs via Bayesian model-probability weighting. Li and Jilkov~\cite{li2005survey} survey IMM variants for maneuvering target tracking, and Mazor et al.~\cite{mazor1998imm} demonstrate IMM superiority over single-model filters when targets switch between kinematic regimes. Our contribution extends the IMM framework by (i)~operating in 3-D world coordinates rather than 2-D image space, (ii)~incorporating social forces as a behavior-aware prediction input, and (iii)~embedding the filter within a DeepSORT association pipeline with a tuneable appearance--motion trade-off.
+The IMM algorithm~\cite{blom1988imm, blackman1999design} maintains a bank of Kalman (or extended Kalman) filters, each embodying a different motion hypothesis, and blends their outputs via Bayesian model-probability weighting. Li and Jilkov~\cite{li2005survey} survey IMM variants for maneuvering target tracking, and Mazor et al.~\cite{mazor1998imm} demonstrate IMM superiority over single-model filters when targets switch between kinematic regimes. Our contribution extends the IMM framework by (i)~operating in 3-D world coordinates rather than 2-D image space, (ii)~incorporating social forces as a behavior-aware prediction input, and (iii)~embedding the filter within a modified DeepSORT association pipeline with a tuneable appearance-motion trade-off.
 
 % ======================================================================
 %  3. METHODOLOGY
@@ -129,7 +138,7 @@ Figure~\ref{fig:pipeline} illustrates the end-to-end pipeline. Raw RGB and depth
 \node[wideblock, below=0.8cm of depthproc] (unproj) {3-D Back-\\Projection};
 
 % Row 3: Association
-\node[wideblock, below=1.0cm of $(reid)!0.5!(unproj)$] (assoc) {DeepSORT\\Association\\$\lambda$-weighted cost};
+\node[wideblock, below=1.0cm of $(reid)!0.5!(unproj)$] (assoc) {Tracker\\Data Association\\$\lambda$-weighted cost};
 
 % Row 4: Filter
 \node[block, below left=1.0cm and 0.3cm of assoc] (imm) {Behavioral\\IMM Filter};
@@ -156,7 +165,7 @@ Figure~\ref{fig:pipeline} illustrates the end-to-end pipeline. Raw RGB and depth
 \draw[arr] (kf) |- (output);
 
 % Feedback arrow
-\draw[arr, dashed, gray] (output.east) -- ++(1.2,0) |- (assoc.east)
+\draw[arr, dashed, gray] (output.east) -- ++(3.2,0) |- (assoc.east)
     node[note, pos=0.25, right] {state feedback};
 
 \end{tikzpicture}
@@ -220,7 +229,7 @@ p_Y + v_Y \Delta t \\ v_Y
 \end{equation}
 A straight-line fallback is used when $|\omega| < 10^{-4}$ to avoid numerical singularity in the $v/\omega$ terms.
 
-\subsubsection{Constant Deceleration / Stop (CA)}
+\subsubsection{Constant Acceleration / Stop (CA)}
 The CA model dampens the horizontal speed and vertical velocity at each step to represent yielding or stopping pedestrians:
 \begin{equation}
 \label{eq:ca}
@@ -229,7 +238,7 @@ v_{k+1} = \gamma \, v_k, \qquad v_{Y,k+1} = \gamma_Y \, v_{Y,k}
 with damping factors $\gamma = 0.85$ and $\gamma_Y = 0.9$. Position propagation follows the CV form using the pre-damped velocity.
 
 \textbf{Rationale for three models.}
-The CV model handles the common case of steady walking. The CT model captures evasive maneuvers triggered by oncoming vehicles or other pedestrians. The CA model represents the deceleration phase when a pedestrian stops or yields. By maintaining all three concurrently, the IMM can rapidly adapt its belief as the pedestrian transitions between behavioral regimes without the latency of a single-model filter that must re-estimate kinematic parameters after a mode change~\cite{li2005survey}.
+The CV model handles the common case of steady walking. The CT model captures evasive maneuvers triggered by oncoming vehicles or other pedestrians. The CA model represents the acceleration phase when a pedestrian stops or yields. By maintaining all three concurrently, the IMM can rapidly adapt its belief as the pedestrian transitions between behavioral regimes by dynamically updating the markov transition matrix, $\Pi$, without the latency of a single-model filter that must re-estimate kinematic parameters after a mode change~\cite{li2005survey}.
 
 % ------------------------------------------------------------------
 %  3.4 Social Force Model
@@ -278,7 +287,7 @@ Each of the three models undergoes an independent EKF update upon receiving a 3-
 \mathbf{P}_{k|k}^{(j)} &= (\mathbf{I} - \mathbf{K}_k^{(j)} \mathbf{H})\,\mathbf{P}_{k|k-1}^{(j)}\,(\mathbf{I} - \mathbf{K}_k^{(j)} \mathbf{H})^\top + \mathbf{K}_k^{(j)}\,\mathbf{R}\,(\mathbf{K}_k^{(j)})^\top \label{eq:upd_cov}
 \end{align}
 
-\textbf{Process noise.} The per-model process noise matrices $\mathbf{Q}^{(j)} \in \mathbb{R}^{7 \times 7}$ are diagonal, reflecting the expected kinematic variability for each mode (Table~\ref{tab:Q}). The CV model has elevated position noise to accommodate unmodeled lateral deviations; the CT model has the largest turn-rate noise; the CA model has elevated speed noise to cover the range of deceleration profiles.
+\textbf{Process noise.} The per-model process noise matrices $\mathbf{Q}^{(j)} \in \mathbb{R}^{7 \times 7}$ are diagonal, reflecting the expected kinematic variability for each mode (Table~\ref{tab:Q}). The CV model has elevated position noise to accommodate unmodeled lateral deviations; the CT model has the largest turn-rate noise; the CA model has elevated speed noise to cover the range of acceleration profiles.
 
 \begin{table}[!t]
 \centering
@@ -361,18 +370,9 @@ The base Markov transition matrix $\bm{\Pi}_{\text{base}}$ (Table~\ref{tab:pi}) 
 \subsection{Camera-to-World Coordinate Transformation}
 \label{sec:coords}
 
-The CARLA simulator provides actor positions in a global world frame. We convert these to camera-frame coordinates using the camera's extrinsic pose. Given the camera's forward, right, and up unit vectors $(\hat{\mathbf{f}}, \hat{\mathbf{r}}, \hat{\mathbf{u}})$ and the displacement $\Delta\mathbf{p} = \mathbf{p}_{\text{world}} - \mathbf{p}_{\text{cam}}$:
-\begin{equation}
-\label{eq:cam_frame}
-\begin{bmatrix} p_X \\ p_Z \\ p_Y \end{bmatrix} = \begin{bmatrix}
-\hat{\mathbf{r}} \cdot \Delta\mathbf{p} \\
-\hat{\mathbf{f}} \cdot \Delta\mathbf{p} \\
--\hat{\mathbf{u}} \cdot \Delta\mathbf{p}
-\end{bmatrix}
-\end{equation}
-where $p_X$ is the camera-right axis, $p_Z$ is the camera-forward (depth) axis, and $p_Y$ is the camera-down axis. The sign flip on $\hat{\mathbf{u}}$ converts CARLA's Z-up convention to the standard camera-down convention.
+The CARLA simulator provides actor positions in a global world frame, that we convert to camera 3-D frame to be used as our ground truth for validation.
 
-For detection-level depth unprojection from a pixel $(u, v)$ with depth $d$ (metres):
+For detection-level depth unprojection of the camera feed from a pixel $(u, v)$ with depth $d$ (metres):
 \begin{equation}
 \label{eq:unproj}
 p_X = \frac{(u - c_x)\,d}{f_x}, \quad p_Z = d, \quad p_Y = \frac{(v - c_y)\,d}{f_y}
@@ -385,7 +385,7 @@ where $f_x = f_y = \frac{W}{2\tan(\text{FOV}/2)} = 400\,\text{px}$ and $(c_x, c_
 \subsection{Data Association}
 \label{sec:assoc}
 
-We adopt the DeepSORT~\cite{wojke2017simple} cascade matching framework. The cost matrix blends appearance and motion terms via a tuneable parameter $\lambda \in [0, 1]$:
+We adopt a DeepSORT cascade matching framework. A soft-gated data association has been introduced as opposed to vanilla DeepSORT. The cost matrix blends appearance and motion terms via a tuneable parameter $\lambda \in [0, 1]$:
 \begin{equation}
 \label{eq:cost}
 c_{ij} = \lambda \, d_{\text{app}}(i, j) + (1 - \lambda) \, d_{\text{mot}}(i, j)
@@ -403,7 +403,7 @@ computed from the IMM's fused position mean and covariance in the $[p_X, p_Z, p_
 \label{sec:experiments}
 
 \subsection{CARLA Configuration}
-All experiments are conducted in CARLA's Town10HD map with the ego vehicle stationary at \texttt{spawn\_points[0]}. All traffic lights are forced to red to avoid confounding detections. The forward-facing RGB-D camera ($800{\times}600$, $90^\circ$ FOV) captures frames at $20\,\text{Hz}$ for $5\,\text{s}$ per scenario ($100$ frames). Depth is encoded as 16-bit PNG via the formula $d_{\text{uint16}} = \lfloor d / d_{\max} \times 65535 \rfloor$ with $d_{\max} = 50\,\si{m}$.
+All experiments are conducted in CARLA's Town10HD map with the ego vehicle stationary at \texttt{spawn\_points[0]}. The forward-facing RGB-D camera ($800{\times}600$, $90^\circ$ FOV) captures frames at $20\,\text{Hz}$ for $5\,\text{s}$ per scenario ($100$ frames). Depth is encoded as 16-bit PNG via the formula $d_{\text{uint16}} = \lfloor d / d_{\max} \times 65535 \rfloor$ with $d_{\max} = 50\,\si{m}$.
 
 \subsection{Scenario Design}
 Pedestrians are spawned with positions sampled from $\mathcal{N}(\bm{\mu}_{\text{spawn}}, \bm{\sigma}_{\text{spawn}}^2)$ relative to the ego vehicle, with $\bm{\mu}_{\text{spawn}} = (10, 0, 0)\,\si{m}$ (10\,m forward) and $\bm{\sigma}_{\text{spawn}} = (3, 5, 0)\,\si{m}$. Walking speeds are drawn uniformly from $[1.0, 1.5]\,\si{m/s}$ with random headings. A social force repulsion model within CARLA (\mbox{$R_{\text{soc}} = 2.0\,\si{m}$}, \mbox{$A_{\text{soc}} = 3.5$}, \mbox{$\beta = 0.5\,\si{m^{-1}}$}) prevents unnatural pedestrian overlap in the ground-truth trajectories. Failed spawn attempts are retried up to 20 times with re-sampled positions.
@@ -413,7 +413,7 @@ We evaluate five configurations (Table~\ref{tab:methods}) that isolate the contr
 
 \begin{table}[!t]
 \centering
-\caption{Five tracker configurations evaluated. ``IMM'' denotes the behavior-aware Interacting Multiple Model filter; ``KF'' denotes the vanilla constant-velocity Kalman filter operating in image space.}
+\caption{Five tracker configurations evaluated. ``IMM'' denotes the behavior-aware Interacting Multiple Model filter; ``KF'' denotes the vanilla constant-velocity Kalman filter.}
 \label{tab:methods}
 \begin{tabular}{@{}llcc@{}}
 \toprule
@@ -423,7 +423,7 @@ M1 & Behavioral IMM ($\lambda{=}0$)    & IMM & 0.0 \\
 M2 & Behavioral IMM ($\lambda{=}0.5$)  & IMM & 0.5 \\
 M3 & Vanilla KF ($\lambda{=}0$)        & KF  & 0.0 \\
 M4 & Vanilla KF ($\lambda{=}0.5$)      & KF  & 0.5 \\
-M5 & Appearance Only ($\lambda{=}1$)    & KF  & 1.0 \\
+M5 & Appearance Only ($\lambda{=}1$)    & NA  & 1.0 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -456,6 +456,7 @@ Table~\ref{tab:rmse_results} reports 3-D position RMSE (metres) and Table~\ref{t
 \begin{table}[!t]
 \centering
 \caption{Mean RMSE (metres) across 5 trials for each method and pedestrian count. Lower is better. \textbf{Bold} marks the best result per column.}
+% \caption{Mean RMSE (metres) across pedestrian counts for each method. Lower is better. \textbf{Bold} marks the best result per column.}
 \label{tab:rmse_results}
 \begin{tabular}{@{}lccccc@{}}
 \toprule
@@ -479,7 +480,7 @@ M5: Appear.\ ($\lambda{=}1$)  & 0.233 & 0.260 & 0.467 & 0.415 & 0.716 \\
 \textbf{Method} & \textbf{1} & \textbf{2} & \textbf{3} & \textbf{4} & \textbf{5} \\
 \midrule
 M1: IMM ($\lambda{=}0$)       & \textbf{0.0} & 1.0  & 10.4 & 9.0  & 14.4 \\
-M2: IMM ($\lambda{=}0.5$)     & \textbf{0.0} & \textbf{0.6} (tied) & \textbf{7.0} & 7.4  & \textbf{9.8}  \\
+M2: IMM ($\lambda{=}0.5$)     & \textbf{0.0} & \textbf{0.6} & \textbf{7.0} & 7.4  & \textbf{9.8}  \\
 M3: KF ($\lambda{=}0$)        & 2.0 & 4.6  & 17.6 & 15.8 & 30.2 \\
 M4: KF ($\lambda{=}0.5$)      & 0.4 & 2.8  & 13.2 & 12.8 & 21.2 \\
 M5: Appear.\ ($\lambda{=}1$)  & \textbf{0.0} & \textbf{0.6} & \textbf{7.0} & \textbf{6.6} & 13.4 \\
@@ -489,16 +490,14 @@ M5: Appear.\ ($\lambda{=}1$)  & \textbf{0.0} & \textbf{0.6} & \textbf{7.0} & \te
 
 \begin{figure}[!t]
 \centering
-% \includegraphics[width=\columnwidth]{figures/rmse_vs_npeds.png}
-\fbox{\parbox{0.9\columnwidth}{\centering\vspace{2cm}\textit{RMSE vs.\ Number of Pedestrians}\\\textit{(Insert plot from \texttt{plot\_summary.py})}\vspace{2cm}}}
+\includegraphics[width=\columnwidth]{figures/rmse_vs_npeds.png}
 \caption{RMSE vs.\ number of pedestrians for all five methods. M2 (IMM, $\lambda{=}0.5$) achieves the lowest RMSE at 3--5 pedestrians, reaching $0.499\,\text{m}$ at 5~peds compared to $1.102\,\text{m}$ for M3 (KF, $\lambda{=}0$)---a $55\%$ reduction.}
 \label{fig:rmse_vs_npeds}
 \end{figure}
 
 \begin{figure}[!t]
 \centering
-% \includegraphics[width=\columnwidth]{figures/idsw_vs_npeds.png}
-\fbox{\parbox{0.9\columnwidth}{\centering\vspace{2cm}\textit{IDSW vs.\ Number of Pedestrians}\\\textit{(Insert plot from \texttt{plot\_summary.py})}\vspace{2cm}}}
+\includegraphics[width=\columnwidth]{figures/idsw_vs_npeds.png}
 \caption{Identity switches vs.\ number of pedestrians. M2 (IMM, $\lambda{=}0.5$) achieves the fewest switches at 5~peds ($9.8$), while the motion-only KF baseline M3 suffers $30.2$ switches---a $3\times$ degradation.}
 \label{fig:idsw_vs_npeds}
 \end{figure}
@@ -506,13 +505,13 @@ M5: Appear.\ ($\lambda{=}1$)  & \textbf{0.0} & \textbf{0.6} & \textbf{7.0} & \te
 \subsection{Analysis}
 
 \textbf{Effect of filter type.}
-Comparing matched $\lambda$ values, the IMM consistently outperforms the vanilla KF in RMSE. At 5~pedestrians, M1 (IMM, $\lambda{=}0$) achieves $0.804\,\text{m}$ vs.\ M3 (KF, $\lambda{=}0$) at $1.102\,\text{m}$---a $27\%$ reduction. The gap widens with density because the IMM's coordinated-turn and deceleration models capture the non-linear maneuvers triggered by social interactions, while the constant-velocity KF accumulates prediction error during turns and stops.
+Comparing matched $\lambda$ values, the IMM consistently outperforms the vanilla KF in RMSE. At 5~pedestrians, M1 (IMM, $\lambda{=}0$) achieves $0.804\,\text{m}$ vs.\ M3 (KF, $\lambda{=}0$) at $1.102\,\text{m}$, a $27\%$ reduction. The gap widens with density because the IMM's coordinated-turn and acceleration models capture the non-linear maneuvers triggered by social interactions, while the constant-velocity KF accumulates prediction error during turns and stops.
 
 \textbf{Effect of $\lambda$.}
-Incorporating appearance features ($\lambda{=}0.5$) dramatically improves both metrics for the IMM: RMSE drops from $0.804$ to $0.499\,\text{m}$ at 5~peds, and IDSW from $14.4$ to $9.8$. For the vanilla KF, adding appearance ($\lambda{=}0$ to $0.5$) reduces IDSW from $30.2$ to $21.2$ at 5~peds, though RMSE improvement is inconsistent. This confirms that appearance features complement rather than replace principled motion models---they resolve ambiguity that motion gating alone cannot.
+Incorporating appearance features ($\lambda{=}0.5$) dramatically improves both metrics for the IMM: RMSE drops from $0.804$ to $0.499\,\text{m}$ at 5~peds, and IDSW from $14.4$ to $9.8$. For the vanilla KF, adding appearance ($\lambda{=}0$ to $0.5$) reduces IDSW from $30.2$ to $21.2$ at 5~peds, though RMSE improvement is inconsistent. This confirms that appearance features complement rather than replace principled motion models as they resolve ambiguity that motion gating alone cannot.
 
 \textbf{Pure appearance baseline.}
-M5 ($\lambda{=}1$, KF) achieves competitive IDSW at all densities (e.g., $6.6$ at 4~peds vs.\ M2's $7.4$) because cosine-distance matching is robust to short-term occlusions. However, its RMSE is consistently worse than M2 at higher densities ($0.716$ vs.\ $0.499$ at 5~peds), since the underlying KF state is only updated via 2-D image-space measurements and cannot capture 3-D dynamics. This demonstrates that low IDSW alone is insufficient---accurate state estimation requires a behavior-aware filter, not just better association.
+M5 ($\lambda{=}1$, KF) achieves competitive IDSW at all densities (e.g., $6.6$ at 4~peds vs.\ M2's $7.4$) because cosine-distance matching is robust to short-term occlusions. However, its RMSE is consistently worse than M2 at higher densities ($0.716$ vs.\ $0.499$ at 5~peds), since the underlying KF state is only updated via 2-D image-space measurements and cannot capture 3-D dynamics. This demonstrates that low IDSW alone is insufficient. Accurate state estimation requires a behavior-aware filter, not just better association.
 
 \textbf{Scaling with density.}
 All methods degrade as pedestrian count increases, but the rate of degradation differs markedly. M3 (KF, $\lambda{=}0$) exhibits the steepest RMSE increase ($0.207 \to 1.102\,\text{m}$, $5.3\times$) and IDSW increase ($2.0 \to 30.2$, $15\times$). In contrast, M2 (IMM, $\lambda{=}0.5$) scales more gracefully ($0.197 \to 0.499\,\text{m}$, $2.5\times$ RMSE; $0.0 \to 9.8$ IDSW). The IMM's social force term partially mitigates crowding effects by anticipating repulsive maneuvers before they manifest in measurements, maintaining tighter covariance ellipses that improve Mahalanobis gating accuracy.
@@ -522,25 +521,79 @@ At 1--2 pedestrians, all methods perform similarly (RMSE $\approx 0.19$--$0.26\,
 
 \subsection{Qualitative Results}
 
-\begin{figure}[!t]
+
+
+\begin{figure}[H]
 \centering
-% \includegraphics[width=\columnwidth]{figures/trajectories_5ped.png}
-\fbox{\parbox{0.9\columnwidth}{\centering\vspace{3.5cm}\textit{Trajectory Plot: GT (solid) vs.\ Predicted (dashed)}\\\textit{with 2$\sigma$ covariance ellipses}\\\textit{(Insert from \texttt{evaluate.py} output for 5-ped scenario)}\vspace{3.5cm}}}
-\caption{Bird's-eye view ($p_X$ vs.\ $p_Z$) of ground truth (solid) and estimated (dashed) trajectories for 5~pedestrians with M2 (IMM, $\lambda{=}0.5$). Shaded ellipses show $2\sigma$ position uncertainty sampled every $0.5\,\text{s}$. The filter correctly captures turning and deceleration behaviors triggered by pedestrian proximity.}
-\label{fig:traj_qual}
+
+\begin{subfigure}[t]{\columnwidth}
+    \centering
+    \includegraphics[width=0.9\columnwidth]{figures/trajectories_kf_05.png}
+    \caption{Vanilla KF (M4, $\lambda{=}0.5$). Frequent identity switches and tracking errors are visible.}
+    \label{fig:traj_kf}
+\end{subfigure}
+
+\vspace{0.5em}
+
+\begin{subfigure}[t]{\columnwidth}
+    \centering
+    \includegraphics[width=0.9\columnwidth]{figures/trajectories_app_only.png}
+    \caption{Appearance only (M5, $\lambda{=}1$). Frame dropouts result in severe drift in trajectory estimates.}
+    \label{fig:traj_kf}
+\end{subfigure}
+
+% \vspace{0.5em}
+
+\begin{subfigure}[t]{\columnwidth}
+    \centering
+    \includegraphics[width=0.9\columnwidth]{figures/trajectories_5ped.png}
+    \caption{IMM (M2, $\lambda{=}0.5$). Correctly captures turning and acceleration due to interactions.}
+    \label{fig:traj_imm}
+\end{subfigure}
+
+\caption{Bird's-eye view ($p_X$ vs.\ $p_Z$) of ground truth (solid) and estimated (dashed) trajectories for 5 pedestrians. Shaded ellipses show $2\sigma$ position uncertainty sampled every $0.5\,\text{s}$.}
+\label{fig:traj_combined}
+
 \end{figure}
 
-Figure~\ref{fig:traj_qual} shows a representative trajectory plot for the 5-pedestrian scenario with M2 (IMM, $\lambda{=}0.5$). The $2\sigma$ covariance ellipses, drawn every 10 frames ($0.5\,\text{s}$), visualize the filter's uncertainty. Ellipses contract rapidly after measurement updates and grow during occlusion gaps, demonstrating appropriate filter responsiveness. When two pedestrians approach each other, the social force prediction causes the IMM to anticipate divergent trajectories, keeping estimated paths closer to ground truth during near-miss events compared to the vanilla KF, which overshoots through the interaction zone.
+
+% \begin{figure}[!t]
+% \centering
+% \includegraphics[width=\columnwidth]{figures/trajectories_kf_05.png}
+% \caption{Bird's-eye view ($p_X$ vs.\ $p_Z$) of ground truth (solid) and estimated (dashed) trajectories for 5~pedestrians with M4 (Vanilla KF, $\lambda{=}0.5$). Shaded ellipses show $2\sigma$ position uncertainty sampled every $0.5\,\text{s}$. Frequent identity switches and error in tracking clearly visible.}
+% \label{fig:traj_qual}
+% \end{figure}
+
+
+% \begin{figure}[!t]
+% \centering
+% \includegraphics[width=\columnwidth]{figures/trajectories_5ped.png}
+% \caption{Bird's-eye view ($p_X$ vs.\ $p_Z$) of ground truth (solid) and estimated (dashed) trajectories for 5~pedestrians with M2 (IMM, $\lambda{=}0.5$). Shaded ellipses show $2\sigma$ position uncertainty sampled every $0.5\,\text{s}$. The filter correctly captures turning and acceleration behaviors triggered by pedestrian proximity.}
+% \label{fig:traj_qual}
+% \end{figure}
+
+Figure~\ref{fig:traj_combined} shows representative trajectory plots for the 5-pedestrian scenario with M4 (Vanilla KF, $\lambda{=}0.5$), M1 (Appearance, $\lambda{=}1$) and M2 (IMM, $\lambda{=}0.5$). The $2\sigma$ covariance ellipses, drawn every 10 frames ($0.5\,\text{s}$), visualize the filter's uncertainty. In the case of Vanilla KF, trajectory estimates are significantly less accurate as compared to the Behavioral IMM. With data association performed only on basis of appearance matching, frame dropouts, lighting and alignment changes cause trajectory drift and outliers. In M2, ellipses contract rapidly after measurement updates and grow during occlusion gaps, demonstrating appropriate filter responsiveness. When two pedestrians approach each other, the social force prediction causes the IMM to anticipate divergent trajectories, keeping estimated paths closer to ground truth during near-miss events compared to the vanilla KF, which overshoots through the interaction zone. Since prediction IDs are not made in an order corresponding to the ground truth IDs, a Hungarian matching algorithm was used to pair predicted and ground truth IDs.
+
+
+\subsection{Validation on Real World Scenarios}
+
+We performed rollouts for our stack on a few real-world videos of people crossing paths for preliminary testing.\footnote{CARLA and real-world demonstrations available at \url{https://www.youtube.com/playlist?list=PLmW8Uplo7kzdtSllJCaqFMHz9fwXpV4yT}} These videos exhibit the tracking pipeline working effectively in multi-pedestrian scenarios with similar looking people.
+
+
+
 
 % ======================================================================
 %  6. LIMITATIONS AND FUTURE WORK
 % ======================================================================
+
+
+
 \section{Limitations and Future Work}
 \label{sec:limitations}
 
 \textbf{Simulation--reality gap.} All experiments use CARLA's synthetic depth sensor, which provides cleaner depth than real RGB-D cameras (e.g., Intel RealSense). Real-world deployment would require handling depth noise, missing returns, and dynamic range limitations.
 
-\textbf{Social force calibration.} The SFM parameters ($A, B, r$) are set manually. Learning these from data---or replacing the SFM with a lightweight neural interaction module such as a graph attention network---could improve generalization across environments.
+\textbf{Social force calibration.} The SFM parameters ($A, B, r$) are set manually. Learning these from data or replacing the SFM with a lightweight neural interaction module such as a graph attention network could improve generalization across environments.
 
 \textbf{Process noise tuning.} The per-model $\mathbf{Q}$ matrices were hand-tuned. Adaptive estimation of process noise (e.g., via innovation-based scaling or expectation-maximization) would make the filter more robust to varying pedestrian dynamics.
 
@@ -558,22 +611,22 @@ Figure~\ref{fig:traj_qual} shows a representative trajectory plot for the 5-pede
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented a behavior-aware multi-object tracking framework that integrates an Interacting Multiple Model filter---blending constant velocity, coordinated turn, and constant deceleration hypotheses---with social force augmentation in the prediction step. By operating entirely in 3-D world-frame coordinates and embedding the filter within a DeepSORT pipeline with a tuneable appearance--motion cost parameter $\lambda$, we systematically evaluated the benefits of behavior-aware state estimation over standard constant-velocity filtering.
+We presented a behavior-aware multi-object tracking framework that integrates an Interacting Multiple Model filter that blends constant velocity, coordinated turn, and constant acceleration hypotheses with social force augmentation in the prediction step. By operating entirely in 3-D world-frame coordinates and embedding the filter within a DeepSORT pipeline with a tuneable appearance--motion cost parameter $\lambda$, we systematically evaluated the benefits of behavior-aware state estimation over standard constant-velocity filtering.
 
-Our controlled CARLA experiments across five pedestrian densities, five tracker configurations, and five randomized trials demonstrate that the balanced IMM configuration (M2, $\lambda{=}0.5$) achieves the best overall performance: $0.499\,\text{m}$ RMSE and $9.8$ identity switches at 5~pedestrians, compared to $1.102\,\text{m}$ and $30.2$ for the motion-only vanilla KF baseline---representing $55\%$ and $68\%$ reductions, respectively. The results confirm three key findings: (i)~multi-model filtering in 3-D world coordinates substantially outperforms single-model 2-D image-space filtering as scene complexity increases; (ii)~blending appearance and motion cues ($\lambda{=}0.5$) is superior to relying on either alone; and (iii)~social force augmentation improves scaling behavior with pedestrian density by anticipating interaction-driven maneuvers.
+Our controlled CARLA experiments across five pedestrian densities, five tracker configurations, and five randomized trials demonstrate that the balanced IMM configuration (M2, $\lambda{=}0.5$) achieves the best overall performance: $0.499\,\text{m}$ RMSE and $9.8$ identity switches at 5~pedestrians, compared to $1.102\,\text{m}$ and $30.2$ for the motion-only vanilla KF baseline, representing $55\%$ and $68\%$ reductions, respectively. The results confirm three key findings: (i)~multi-model filtering in 3-D world coordinates substantially outperforms single-model 2-D image-space filtering as scene complexity increases; (ii)~blending appearance and motion cues ($\lambda{=}0.5$) is superior to relying on either alone; and (iii)~social force augmentation improves scaling behavior with pedestrian density by anticipating interaction-driven maneuvers.
 
-These results highlight the value of embedding domain-specific behavioral knowledge---in the form of multiple dynamics models and social forces---directly into the state estimation loop, rather than relying solely on post-hoc appearance matching. This paradigm is broadly applicable to autonomous driving perception stacks where safety-critical decisions depend on accurate, identity-consistent trajectory estimation of vulnerable road users.
+These results highlight the value of embedding domain-specific behavioral knowledge in the form of multiple dynamics models and social forces directly into the state estimation loop, rather than relying solely on post-hoc appearance matching. This paradigm is broadly applicable to autonomous driving perception stacks where safety-critical decisions depend on accurate, identity-consistent trajectory estimation of vulnerable road users.
 
-% ======================================================================
-%  CONTRIBUTIONS
-% ======================================================================
 \section*{Contributions}
 
-\textbf{Rahul Ayanampudi:} CARLA simulation integration and scenario design, RGB-D perception pipeline (YOLOv9 + OSNet + DeepSORT), Behavioral IMM filter implementation (CV/CT/CA models, social force augmentation, EKF update), camera-to-world coordinate transformation, batch experiment infrastructure and pipeline orchestration, experimental evaluation and data collection.
+\textbf{Rahul Ayanampudi:} CARLA simulation integration and scenario design, Vanilla KF baseline implementation, Behavioral IMM filter social force augmentation, batch experiment infrastructure and pipeline orchestration, evaluation framework (Hungarian track-to-GT matching, RMSE and IDSW computation), trajectory and covariance ellipse visualization.
 
-\textbf{Aditya Kothari:} Vanilla Kalman filter baseline implementation, $\lambda$-weighted appearance--motion cost formulation in DeepSORT, process and measurement noise tuning ($\mathbf{Q}$, $\mathbf{R}$ matrices), Markov transition matrix calibration, depth unprojection and world-frame state extraction for KF tracks.
+\textbf{Aditya Kothari:} Behavioral IMM filter implementation (CV/CT/CA models, EKF update), camera-to-world coordinate transformation, Markov transition matrix calibration, depth unprojection and world-frame state extraction for KF tracks.
 
-\textbf{Yash Rampuria:} Evaluation framework (Hungarian track-to-GT matching, RMSE and IDSW computation), trajectory and covariance ellipse visualization, summary plot generation, writing of the manuscript and figure generation, literature review.
+\textbf{Yash Rampuria:} RGB-D perception pipeline (YOLOv9 + OSNet + DeepSORT), $\lambda$-weighted appearance--motion cost formulation in the tracker, confidence, IoU and gating parameter tuning, process and measurement noise tuning ($\mathbf{Q}$, $\mathbf{R}$ matrices), Behavioural IMM correction using pure 3D estimates without bounding box height, scenario generation in CARLA for preliminary tests, literature review.
+
+The GitHub repository is available at \url{https://github.com/rayanam2021/MAVBE/tree/rahul-final}
+
 
 % ======================================================================
 %  REFERENCES
